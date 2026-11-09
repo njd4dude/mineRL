@@ -2,7 +2,7 @@
 Train an agent to chop trees in MineRLTreechop-v0 using PPO (reinforcement learning).
 
   python train_treechop.py                 # train (resumes from the latest save if there is one)
-  python train_treechop.py --envs 4        # train with 4 Minecraft instances in parallel (default 3)
+  python train_treechop.py --envs 3        # change how many Minecraft instances run in parallel (default 4)
   python train_treechop.py --watch         # watch the trained agent play
   tensorboard --logdir tb_logs             # view training graphs (in another terminal)
 
@@ -12,6 +12,7 @@ How it learns:
   - PPO adjusts the neural network so actions that led to logs become more likely.
 """
 import argparse
+import functools
 import glob
 import logging
 import os
@@ -90,19 +91,40 @@ def latest_model():
     return max(files, key=os.path.getmtime) if files else None
 
 
-def make_env():
+def set_minecraft_memory(max_mem):
+    """MineRL starts every Minecraft with a 4G Java memory limit and gives no option to change it,
+    so patch the launcher to pass our own limit (e.g. "2G")."""
+    from minerl.env import malmo
+    original_init = malmo.MinecraftInstance.__init__
+    if getattr(original_init, "_patched", False):
+        return
+
+    def patched_init(self, *args, **kwargs):
+        if kwargs.get("max_mem") is None:
+            kwargs["max_mem"] = max_mem
+        original_init(self, *args, **kwargs)
+
+    patched_init._patched = True
+    malmo.MinecraftInstance.__init__ = patched_init
+
+
+def make_env(mc_mem=None):
+    # Runs inside each worker process, so the memory patch applies to that process's Minecraft
+    if mc_mem:
+        set_minecraft_memory(mc_mem)
     # Monitor records episode rewards/lengths so they show up in the logs and TensorBoard
     return Monitor(TreechopEnv())
 
 
-def train(timesteps, n_steps, n_envs):
+def train(timesteps, n_steps, n_envs, mc_mem=None):
+    env_fn = functools.partial(make_env, mc_mem)
     if n_envs == 1:
-        env = DummyVecEnv([make_env])
+        env = DummyVecEnv([env_fn])
     else:
         # Each Minecraft runs in its own process so they all step at the same time
-        env = SubprocVecEnv([make_env for _ in range(n_envs)])
-    print(f"Running {n_envs} Minecraft instance(s), {n_steps} steps each per update "
-          f"({n_steps * n_envs} steps per update)")
+        env = SubprocVecEnv([env_fn for _ in range(n_envs)])
+    print(f"Running {n_envs} Minecraft instance(s) with {mc_mem or '4G (default)'} memory each, "
+          f"{n_steps} steps each per update ({n_steps * n_envs} steps per update)")
 
     path = latest_model()
     if path:
@@ -167,11 +189,15 @@ if __name__ == "__main__":
     parser.add_argument("--timesteps", type=int, default=500_000, help="agent steps to train for")
     parser.add_argument("--n-steps", type=int, default=1024,
                         help="steps collected per Minecraft instance per PPO update")
-    parser.add_argument("--envs", type=int, default=3, help="Minecraft instances to run in parallel")
+    # Defaults picked from benchmarks on this machine (Ryzen 7 7700X, 27 GB RAM in WSL):
+    # 4 instances x 2G was fastest (~27-33 steps/s, ~18 GB RAM peak); 5 was no faster.
+    parser.add_argument("--envs", type=int, default=4, help="Minecraft instances to run in parallel")
+    parser.add_argument("--mc-mem", default="2G",
+                        help="Java memory limit per Minecraft (MineRL's own default is 4G); try 3G if it crashes")
     parser.add_argument("--episodes", type=int, default=3, help="episodes to watch")
     args = parser.parse_args()
 
     if args.watch:
         watch(args.episodes)
     else:
-        train(args.timesteps, args.n_steps, args.envs)
+        train(args.timesteps, args.n_steps, args.envs, args.mc_mem)
