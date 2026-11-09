@@ -3,6 +3,7 @@ Train an agent to chop trees in MineRLTreechop-v0 using PPO (reinforcement learn
 
   python train_treechop.py                 # train (resumes from the latest save if there is one)
   python train_treechop.py --envs 3        # change how many Minecraft instances run in parallel (default 4)
+  python train_treechop.py --cpu-render    # draw Minecraft on the CPU instead of the GPU
   python train_treechop.py --watch         # watch the trained agent play
   tensorboard --logdir tb_logs             # view training graphs (in another terminal)
 
@@ -16,6 +17,14 @@ import functools
 import glob
 import logging
 import os
+import sys
+
+# In WSL, OpenGL defaults to "llvmpipe" (drawing on the CPU). These settings make Minecraft draw
+# on the NVIDIA GPU through Windows DirectX 12 instead. Set before any Minecraft starts, so every
+# instance inherits them. Pass --cpu-render to turn this off.
+if "--cpu-render" not in sys.argv:
+    os.environ.setdefault("GALLIUM_DRIVER", "d3d12")
+    os.environ.setdefault("MESA_D3D12_DEFAULT_ADAPTER_NAME", "NVIDIA")
 
 import gym  # MineRL uses the old gym library
 import gymnasium  # Stable-Baselines3 uses the newer gymnasium library
@@ -192,6 +201,8 @@ if __name__ == "__main__":
     # Defaults picked from benchmarks on this machine (Ryzen 7 7700X, 27 GB RAM in WSL):
     # 4 instances x 2G was fastest (~27-33 steps/s, ~18 GB RAM peak); 5 was no faster.
     parser.add_argument("--envs", type=int, default=4, help="Minecraft instances to run in parallel")
+    parser.add_argument("--cpu-render", action="store_true",
+                        help="draw Minecraft on the CPU (llvmpipe) instead of the GPU")
     parser.add_argument("--mc-mem", default="2G",
                         help="Java memory limit per Minecraft (MineRL's own default is 4G); try 3G if it crashes")
     parser.add_argument("--episodes", type=int, default=3, help="episodes to watch")
