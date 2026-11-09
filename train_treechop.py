@@ -2,6 +2,7 @@
 Train an agent to chop trees in MineRLTreechop-v0 using PPO (reinforcement learning).
 
   python train_treechop.py                 # train (resumes from the latest save if there is one)
+  python train_treechop.py --envs 4        # train with 4 Minecraft instances in parallel (default 3)
   python train_treechop.py --watch         # watch the trained agent play
   tensorboard --logdir tb_logs             # view training graphs (in another terminal)
 
@@ -21,6 +22,8 @@ import minerl  # noqa: F401  (registers the MineRL envs)
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 logging.basicConfig(level=logging.WARNING)
 
@@ -87,8 +90,20 @@ def latest_model():
     return max(files, key=os.path.getmtime) if files else None
 
 
-def train(timesteps, n_steps):
-    env = TreechopEnv()
+def make_env():
+    # Monitor records episode rewards/lengths so they show up in the logs and TensorBoard
+    return Monitor(TreechopEnv())
+
+
+def train(timesteps, n_steps, n_envs):
+    if n_envs == 1:
+        env = DummyVecEnv([make_env])
+    else:
+        # Each Minecraft runs in its own process so they all step at the same time
+        env = SubprocVecEnv([make_env for _ in range(n_envs)])
+    print(f"Running {n_envs} Minecraft instance(s), {n_steps} steps each per update "
+          f"({n_steps * n_envs} steps per update)")
+
     path = latest_model()
     if path:
         print(f"Resuming from {path}")
@@ -107,7 +122,9 @@ def train(timesteps, n_steps):
             device="cuda",
         )
 
-    checkpoint = CheckpointCallback(save_freq=10_000, save_path=MODEL_DIR, name_prefix="treechop_ckpt")
+    # save_freq counts per environment, so divide to save about every 10,000 total steps
+    checkpoint = CheckpointCallback(save_freq=max(10_000 // n_envs, 1), save_path=MODEL_DIR,
+                                    name_prefix="treechop_ckpt")
     try:
         model.learn(total_timesteps=timesteps, callback=checkpoint, reset_num_timesteps=False)
     except KeyboardInterrupt:
@@ -116,7 +133,10 @@ def train(timesteps, n_steps):
         os.makedirs(MODEL_DIR, exist_ok=True)
         model.save(FINAL_MODEL)
         print(f"Saved model to {FINAL_MODEL}")
-        env.close()
+        try:
+            env.close()
+        except Exception:
+            pass  # after Ctrl+C the Minecraft processes may already be gone
 
 
 def watch(episodes):
@@ -145,11 +165,13 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--watch", action="store_true", help="watch the trained agent instead of training")
     parser.add_argument("--timesteps", type=int, default=500_000, help="agent steps to train for")
-    parser.add_argument("--n-steps", type=int, default=2048, help="steps collected per PPO update")
+    parser.add_argument("--n-steps", type=int, default=1024,
+                        help="steps collected per Minecraft instance per PPO update")
+    parser.add_argument("--envs", type=int, default=3, help="Minecraft instances to run in parallel")
     parser.add_argument("--episodes", type=int, default=3, help="episodes to watch")
     args = parser.parse_args()
 
     if args.watch:
         watch(args.episodes)
     else:
-        train(args.timesteps, args.n_steps)
+        train(args.timesteps, args.n_steps, args.envs)
