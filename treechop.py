@@ -3,10 +3,20 @@ logging.basicConfig(level=logging.INFO)
 import time
 import gym
 import minerl
+from minerl.herobraine.env_specs.treechop_specs import Treechop
 
 # Treechop: start in a forest with an iron axe.
 # +1 reward per log collected; episode ends at 64 logs or 8000 steps.
-env = gym.make("MineRLTreechop-v0")
+
+# False = normal 64x64 images (use this for training)
+# True  = 640x360 images, nicer for watching
+WATCH_HD = False
+
+if WATCH_HD:
+    Treechop(name="MineRLTreechopHD-v0", resolution=(640, 360)).register()
+    env = gym.make("MineRLTreechopHD-v0")
+else:
+    env = gym.make("MineRLTreechop-v0")
 print("Observation space:", env.observation_space)
 print("Action space:", env.action_space)
 
