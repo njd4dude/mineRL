@@ -1,5 +1,6 @@
 import logging
 logging.basicConfig(level=logging.DEBUG)
+import time
 import gym
 import minerl
 
@@ -19,3 +20,5 @@ while not done:
     action["ESC"] = 0
     obs, reward, done, _ = env.step(action)
     env.render()
+    # Slow down to roughly real Minecraft speed (~20 steps/sec)
+    time.sleep(0.05)
