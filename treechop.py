@@ -10,7 +10,7 @@ from minerl.herobraine.env_specs.treechop_specs import Treechop
 
 # False = normal 64x64 images (use this for training)
 # True  = 640x360 images, nicer for watching
-WATCH_HD = False
+WATCH_HD = True
 
 if WATCH_HD:
     Treechop(name="MineRLTreechopHD-v0", resolution=(640, 360)).register()
