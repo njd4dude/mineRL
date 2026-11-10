@@ -4,6 +4,7 @@ Watch VPT recordings the way vpt_data.py saw them, to check its filtering by eye
   python vpt_review.py                         # 1 kept + 1 skipped segment, picked at random
   python vpt_review.py --kept 3 --skipped 3    # more of each
   python vpt_review.py --new 2                 # segments vpt_data.py never looked at
+  python vpt_review.py --version 7 --new 3     # recordings from another VPT version (any task, not just treechop)
   python vpt_review.py treechop-05e006bbcdec-20210904-183454   # specific segments
 
 Re-downloads each segment (vpt_data.py deletes the videos after converting them) and writes
@@ -33,6 +34,11 @@ import vpt_data as V
 from train_treechop import OBS_H, OBS_W, RENDER_RES, RUNS_DIR, describe_action, human_to_action, process_pov
 
 OUT_DIR = os.path.join(RUNS_DIR, "vpt_review")
+# One index per VPT dataset version. Only 6.x has "treechop-*" segments; the others are other
+# tasks, but players chop trees in them too (the log filter works the same on any recording).
+INDEX_URLS = {6: V.INDEX_URL} | {
+    v: f"https://openaipublic.blob.core.windows.net/minecraft-rl/snapshots/all_{v}xx_{d}.json"
+    for v, d in ((7, "Apr_6"), (8, "Jun_29"), (9, "Jun_29"), (10, "Jun_29"))}
 VID_W, VID_H = 640, 360
 PANEL_W = 470   # text column + the network's view beside it
 BAR_H = 34
@@ -195,6 +201,8 @@ def main():
     parser.add_argument("--kept", type=int, default=None, help="random segments from data/vpt_treechop/")
     parser.add_argument("--skipped", type=int, default=None, help="random segments that failed the log filter")
     parser.add_argument("--new", type=int, default=0, help="random segments vpt_data.py never processed")
+    parser.add_argument("--version", type=int, default=6, choices=sorted(INDEX_URLS),
+                        help="VPT dataset version to pick --new segments (and named ones) from")
     parser.add_argument("--min-logs", type=int, default=5, help="same as vpt_data.py")
     parser.add_argument("--keep", type=float, default=20, help="same as vpt_data.py")
     parser.add_argument("--window", type=float, default=5, help="same as bc_train.py (for colouring only)")
@@ -204,13 +212,13 @@ def main():
         args.kept, args.skipped = 1, 1
     rng = random.Random(args.seed)
 
-    index = json.loads(V.fetch(V.INDEX_URL))
+    index = json.loads(V.fetch(INDEX_URLS[args.version]))
     by_name = {os.path.splitext(os.path.basename(p))[0]: p for p in index["relpaths"]}
     kept = sorted(f[:-4] for f in os.listdir(V.OUT_DIR) if f.endswith(".npz"))
     skip_dir = os.path.join(V.OUT_DIR, "skipped")
     skipped = sorted(os.listdir(skip_dir)) if os.path.isdir(skip_dir) else []
     done = set(kept) | set(skipped)
-    unseen = [n for n in by_name if n.startswith("treechop-") and n not in done]
+    unseen = [n for n in by_name if (n.startswith("treechop-") or args.version != 6) and n not in done]
 
     os.makedirs(OUT_DIR, exist_ok=True)
 

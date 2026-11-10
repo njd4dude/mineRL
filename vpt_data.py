@@ -57,9 +57,19 @@ def count_mined(tick):
     return sum(v for k, v in tick.get("stats", {}).items() if k in MINE_STATS)
 
 
+MAX_BREAKS_PER_TICK = 2       # bigger jumps are the stats loading, not chopping (see logs_mined)
+
+
 def logs_mined(ticks):
-    counts = [count_mined(t) for t in ticks]
-    return sum(max(b - a, 0) for a, b in zip(counts, counts[1:])), counts
+    """(logs broken in the recording, running count per tick starting at 0). Some recordings'
+    stats only arrive a few ticks in, jumping from 0 to the player's lifetime total (98,038 in
+    one case); those jumps are ignored, or they'd pass --min-logs and count as a "break"."""
+    raw = [count_mined(t) for t in ticks]
+    counts = [0]
+    for a, b in zip(raw, raw[1:]):
+        step = b - a
+        counts.append(counts[-1] + (step if 0 < step <= MAX_BREAKS_PER_TICK else 0))
+    return counts[-1], counts
 
 
 def chunk_inputs(ticks):
