@@ -5,8 +5,7 @@ Behaviour cloning: teach the PPO network to copy the human actions in data/vpt_t
   python bc_train.py                     # new run: runs/model_<date>_<time>_bc/
   python bc_train.py --epochs 30 --name bc_long
   python bc_train.py --window 3          # only copy the last 3 s before each log break
-  python train_treechop.py --watch       # then watch it (newest run)
-  python evaluate.py --models random latest
+  python evaluate.py --models random latest --record   # then score it, and watch the saved games
 
 The result is a normal PPO model (same network and [move, yaw, pitch] actions as
 train_treechop.py), so it can be watched, evaluated, and later fine-tuned with PPO.

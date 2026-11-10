@@ -9,10 +9,11 @@ Train an agent to chop trees in MineRLTreechop-v0 using PPO (reinforcement learn
   python train_treechop.py --resume runs/model_20261109_163045   # continue a specific run
   python train_treechop.py --envs 3        # change how many Minecraft instances run in parallel (default 4)
   python train_treechop.py --cpu-render    # draw Minecraft on the CPU instead of the GPU
-  python train_treechop.py --watch         # watch the newest model of the latest run
-  python train_treechop.py --watch --model runs/model_20261109_163045/treechop_ckpt_50000_steps.zip
-  python train_treechop.py --watch --record   # save each episode as an .mp4 instead of a live window
   tensorboard --logdir runs                # view and compare all runs' training graphs
+
+To see how a model plays:
+  python debug_view.py --model latest      # live window of what the agent sees
+  python evaluate.py --models latest --record   # score it on fixed worlds and save each game as .mp4
 
 How it learns:
   - Each step the agent sees a small 64x64 image of the world (HUD cropped off) and picks one of a
@@ -95,7 +96,8 @@ def human_to_action(dyaw, dpitch, forward, jump):
 LOG_ITEMS = ["acacia_log", "birch_log", "dark_oak_log", "jungle_log", "oak_log", "spruce_log"]
 LOGS_TO_WIN = 64
 SPAWN_BIOME = "forest"       # Minecraft 1.16 biome category to spawn in
-ENV_NAME = "MineRLTreechopInventory320-v0"
+AXE_ITEM = "iron_axe"         # Treechop starts the agent with one
+ENV_NAME = "MineRLTreechopAxe320-v0"   # renamed whenever the env's observations change
 
 # Minecraft's HUD (hotbar, hearts, hunger, XP) has a fixed size in pixels: the hotbar alone is
 # 182 px wide, so at 64x64 it filled ~60% of the image. Instead, render at 320x180, cut off the
@@ -120,7 +122,10 @@ class TreechopWithInventory(Treechop):
     (the same way MineRL's own ObtainDiamondShovel does)."""
 
     def create_observables(self):
-        return super().create_observables() + [H.FlatInventoryObservation(LOG_ITEMS)]
+        # The axe count tells when the agent died (dying drops the inventory), see TreechopEnv.step.
+        # Not H.ObservationFromLifeStats (health): with it, Minecraft instances often hung when
+        # 4 ran at once (1-2 of 4 per test, versus none without it).
+        return super().create_observables() + [H.FlatInventoryObservation(LOG_ITEMS + [AXE_ITEM])]
 
     def create_agent_start(self):
         # Treechop's own world settings (generatorOptions with "fixedBiome": 4 = forest) are in the
@@ -139,18 +144,22 @@ def register_env():
 class TreechopEnv(gymnasium.Env):
     """Wraps MineRL Treechop so Stable-Baselines3 can use it:
     image-only observations, [move, yaw, pitch] actions, and each action held for several game steps.
-    Reward: +1 for each log added to the inventory (computed here, since MineRL's is always 0)."""
+    Reward: +1 for each log added to the inventory (computed here, since MineRL's is always 0).
+    The episode ends when the agent loses its axe, which almost always means it died (e.g.
+    drowned) and dropped everything: otherwise it respawns without the axe, and gets no reward
+    until it holds more logs than before it died. (An axe can also wear out after 250 uses;
+    without it the agent is just as stuck, so ending the episode is right then too.)"""
 
-    def __init__(self, frame_skip=4, render=False):
+    def __init__(self, frame_skip=4):
         super().__init__()
         register_env()  # runs in each worker process too
         self.env = gym.make(ENV_NAME)
         self.prev_logs = 0
         self.last_pov = np.zeros((OBS_H, OBS_W, 3), dtype=np.uint8)
         self.needs_restart = False
+        self.died = False
         self.frame_skip = frame_skip
-        self.render_enabled = render
-        self.on_frame = None  # optional function called with every full-size game frame (for recording)
+        self.on_frame = None  # optional function called with every full-size game frame (evaluate.py --record)
         self.observation_space = gymnasium.spaces.Box(0, 255, (OBS_H, OBS_W, 3), dtype=np.uint8)
         self.action_space = gymnasium.spaces.MultiDiscrete(ACTION_DIMS)
 
@@ -175,10 +184,18 @@ class TreechopEnv(gymnasium.Env):
         responding (e.g. a timeout while generating a new world); without this, one stuck
         instance crashed the whole training run."""
         print(f"Minecraft instance problem ({reason}); restarting it", flush=True)
+        instances = getattr(self.env.unwrapped, "instances", [])
         try:
             self.env.close()
         except Exception:
             pass
+        # MineRL's close() skips instances it no longer thinks are running (e.g. after a timeout),
+        # which left their Minecraft processes behind; kill them explicitly
+        for instance in instances:
+            try:
+                instance.kill()
+            except Exception:
+                pass
         self.env = gym.make(ENV_NAME)
         self.needs_restart = False
 
@@ -198,6 +215,7 @@ class TreechopEnv(gymnasium.Env):
                 self.needs_restart = True
                 print(f"reset failed ({type(e).__name__}: {e}), attempt {attempt}/{attempts}", flush=True)
         self.prev_logs = self._count_logs(obs)
+        self.died = False
         if self.on_frame:
             self.on_frame(obs["pov"])
         self.last_pov = process_pov(obs["pov"])
@@ -210,26 +228,33 @@ class TreechopEnv(gymnasium.Env):
         for _ in range(self.frame_skip):
             try:
                 obs, _, done, info = self.env.step(action)  # MineRL's own reward is always 0 here
+                # When Minecraft stops responding, MineRL doesn't raise: it returns a RANDOM
+                # observation (random inventory, so thousands of fake "logs") with info["error"]
+                if "error" in info:
+                    raise RuntimeError(info["error"])
             except Exception as e:
-                # End this episode early ("truncated"); the next reset() restarts Minecraft
+                # End this episode early ("truncated") without using that step's observation; the
+                # next reset() restarts this Minecraft instance
                 print(f"step failed ({type(e).__name__}: {e}); ending the episode", flush=True)
                 self.needs_restart = True
-                return self.last_pov, total_reward, False, True, {"logs": self.prev_logs, "env_error": True}
+                return self.last_pov, total_reward, False, True, {"logs": self.prev_logs, "died": False,
+                                                                   "env_error": True}
             logs = self._count_logs(obs)
             # +1 per log beyond the most held so far this episode, so logs are never counted twice
-            # (e.g. if the inventory reading drops, or the agent dies and picks logs back up)
+            # (e.g. if the inventory reading drops for a moment)
             total_reward += max(logs - self.prev_logs, 0)
             self.prev_logs = max(self.prev_logs, logs)
             if logs >= LOGS_TO_WIN:
                 done = True
-            if self.render_enabled:
-                self.env.render()
+            if int(obs["inventory"][AXE_ITEM]) == 0:
+                self.died = True   # lost the axe: died and dropped everything (or it wore out)
+                done = True
             if self.on_frame:
                 self.on_frame(obs["pov"])
             if done:
                 break
         self.last_pov = process_pov(obs["pov"])
-        return self.last_pov, total_reward, done, False, {"logs": self.prev_logs}
+        return self.last_pov, total_reward, done, False, {"logs": self.prev_logs, "died": self.died}
 
     def close(self):
         self.env.close()
@@ -244,8 +269,9 @@ def new_run_dir(name=None):
 
 
 def latest_run():
-    """The most recently used run folder, or None."""
-    runs = [d for d in glob.glob(os.path.join(RUNS_DIR, "*")) if os.path.isdir(d)]
+    """The most recently used run folder, or None. Only training runs (runs/model_*) count, not
+    e.g. runs/evals/, which changes whenever an evaluation saves its results."""
+    runs = [d for d in glob.glob(os.path.join(RUNS_DIR, "model_*")) if os.path.isdir(d)]
     return max(runs, key=os.path.getmtime) if runs else None
 
 
@@ -442,82 +468,8 @@ def train(timesteps, n_steps, n_envs, mc_mem=None, resume=None, name=None, init=
             pass  # after Ctrl+C the Minecraft processes may already be gone
 
 
-VIDEO_FPS = 20     # Minecraft runs 20 ticks per second, so this plays back at normal game speed
-VIDEO_SCALE = 3    # 320x180 -> 960x540; scaled up with sharp pixels so players don't blur it
-
-
-def open_video(path):
-    """An OpenCV video writer for an .mp4 file. Uses MPEG-4 (mp4v): the pip OpenCV has no H.264
-    encoder. Plays in VLC and the Windows Media Player / Movies & TV apps."""
-    size = (RENDER_RES[0] * VIDEO_SCALE, RENDER_RES[1] * VIDEO_SCALE)
-    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), VIDEO_FPS, size)
-    if not writer.isOpened():
-        raise RuntimeError(f"OpenCV can't write .mp4 files here ({path})")
-    return writer
-
-
-def watch(episodes, model_arg=None, record=False):
-    path = resolve_model(model_arg)
-    if not path:
-        print(f"No trained model found in {model_arg or RUNS_DIR + '/'}. Train first.")
-        return
-    if not os.path.exists(path):
-        print(f"Model file not found: {path}")
-        return
-    print(f"Loading {path}")
-    model = PPO.load(path, device="cuda")
-    env = TreechopEnv(render=not record)
-    # Saved models store the image shape channels-first, e.g. (3, 64, 64)
-    problem = model_mismatch(model)
-    if problem:
-        print(problem)
-        env.close()
-        return
-    video_dir = os.path.join(os.path.dirname(path), "videos")
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    writer = None
-
-    def write_frame(pov):
-        big = cv2.resize(pov, None, fx=VIDEO_SCALE, fy=VIDEO_SCALE, interpolation=cv2.INTER_NEAREST)
-        writer.write(cv2.cvtColor(big, cv2.COLOR_RGB2BGR))  # OpenCV expects BGR
-
-    try:
-        for ep in range(episodes):
-            if record:
-                os.makedirs(video_dir, exist_ok=True)
-                name = os.path.splitext(os.path.basename(path))[0]
-                video_path = os.path.join(video_dir, f"{name}_{stamp}_ep{ep + 1}.mp4")
-                writer = open_video(video_path)
-                env.on_frame = write_frame
-            obs, _ = env.reset()
-            done = False
-            total = 0.0
-            while not done:
-                action, _ = model.predict(obs, deterministic=False)
-                obs, reward, done, _, _ = env.step(action)
-                total += reward
-                if reward > 0:
-                    print(f"  got {reward:.0f} log(s), total = {total:.0f}")
-            print(f"Episode {ep + 1}: {total:.0f} logs")
-            if writer:
-                writer.release()
-                writer = None
-                print(f"  saved video to {video_path}")
-    except KeyboardInterrupt:
-        print("\nStopped by Ctrl+C")
-    finally:
-        if writer:
-            writer.release()  # keep the part of the episode recorded so far
-            print(f"  saved partial video to {video_path}")
-        try:
-            env.close()
-        except Exception:
-            pass
-
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--watch", action="store_true", help="watch the trained agent instead of training")
     parser.add_argument("--timesteps", type=int, default=500_000, help="agent steps to train for")
     parser.add_argument("--n-steps", type=int, default=1024,
                         help="steps collected per Minecraft instance per PPO update")
@@ -528,11 +480,6 @@ if __name__ == "__main__":
                         help="draw Minecraft on the CPU (llvmpipe) instead of the GPU")
     parser.add_argument("--mc-mem", default="2G",
                         help="Java memory limit per Minecraft (MineRL's own default is 4G); try 3G if it crashes")
-    parser.add_argument("--episodes", type=int, default=3, help="episodes to watch")
-    parser.add_argument("--record", action="store_true",
-                        help="with --watch: save each episode as an .mp4 in the run's videos/ folder (no live window)")
-    parser.add_argument("--model", default=None,
-                        help="with --watch: a .zip checkpoint or a run folder (default: newest model in the latest run)")
     parser.add_argument("--resume", nargs="?", const="latest", default=None,
                         help="continue a run instead of starting a new one: a run folder, or no value for the latest run")
     parser.add_argument("--init", default=None,
@@ -543,10 +490,7 @@ if __name__ == "__main__":
                         help="optional label added to a new run's folder name, e.g. --name smallturns")
     args = parser.parse_args()
 
-    if args.watch:
-        watch(args.episodes, args.model, args.record)
-    else:
-        if args.init and args.resume:
-            parser.error("use --init to start a fine-tuning run, or --resume to continue one, not both")
-        train(args.timesteps, args.n_steps, args.envs, args.mc_mem, args.resume, args.name,
-              args.init, args.warmup)
+    if args.init and args.resume:
+        parser.error("use --init to start a fine-tuning run, or --resume to continue one, not both")
+    train(args.timesteps, args.n_steps, args.envs, args.mc_mem, args.resume, args.name,
+          args.init, args.warmup)
