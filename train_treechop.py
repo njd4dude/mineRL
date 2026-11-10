@@ -8,7 +8,7 @@ Train an agent to chop trees in MineRLTreechop-v0 using PPO (reinforcement learn
   tensorboard --logdir tb_logs             # view training graphs (in another terminal)
 
 How it learns:
-  - Each step the agent sees the 64x64 image and picks one of a few simple actions.
+  - Each step the agent sees a small 128x56 image of the world and picks one of a few simple actions.
   - It gets +1 reward for each log collected.
   - PPO adjusts the neural network so actions that led to logs become more likely.
 """
@@ -26,6 +26,7 @@ if "--cpu-render" not in sys.argv:
     os.environ.setdefault("GALLIUM_DRIVER", "d3d12")
     os.environ.setdefault("MESA_D3D12_DEFAULT_ADAPTER_NAME", "NVIDIA")
 
+import cv2
 import gym  # MineRL uses the old gym library
 import gymnasium  # Stable-Baselines3 uses the newer gymnasium library
 import minerl  # noqa: F401  (registers the MineRL envs)
@@ -58,7 +59,21 @@ ACTIONS = [
 # Minecraft 1.16 has a separate item for each wood type
 LOG_ITEMS = ["acacia_log", "birch_log", "dark_oak_log", "jungle_log", "oak_log", "spruce_log"]
 LOGS_TO_WIN = 64
-ENV_NAME = "MineRLTreechopInventory-v0"
+ENV_NAME = "MineRLTreechopInventory320-v0"
+
+# Minecraft's HUD (hotbar, hearts, hunger, XP) has a fixed size in pixels: the hotbar alone is
+# 182 px wide, so at 64x64 it filled ~60% of the image. Instead, render at 320x180, cut off the
+# HUD rows at the bottom, and shrink what's left to a small image for the network.
+RENDER_RES = (320, 180)      # (width, height) Minecraft draws at
+HUD_TOP_ROW = 138            # at 320x180 the HUD starts around row 140; keep rows above this
+OBS_W, OBS_H = 128, 56       # what the network sees; keeps the 320x138 aspect ratio (~2.3:1)
+
+
+def process_pov(pov):
+    """Crop off the HUD and shrink the frame to what the network sees."""
+    world = pov[:HUD_TOP_ROW]
+    small = cv2.resize(world, (OBS_W, OBS_H), interpolation=cv2.INTER_AREA)
+    return np.ascontiguousarray(small)
 
 
 class TreechopWithInventory(Treechop):
@@ -75,7 +90,7 @@ def register_env():
     try:
         gym.spec(ENV_NAME)
     except gym.error.Error:
-        TreechopWithInventory(name=ENV_NAME).register()
+        TreechopWithInventory(name=ENV_NAME, resolution=RENDER_RES).register()
 
 
 class TreechopEnv(gymnasium.Env):
@@ -90,7 +105,7 @@ class TreechopEnv(gymnasium.Env):
         self.prev_logs = 0
         self.frame_skip = frame_skip
         self.render_enabled = render
-        self.observation_space = gymnasium.spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8)
+        self.observation_space = gymnasium.spaces.Box(0, 255, (OBS_H, OBS_W, 3), dtype=np.uint8)
         self.action_space = gymnasium.spaces.Discrete(len(ACTIONS))
 
     def _make_action(self, index):
@@ -108,8 +123,7 @@ class TreechopEnv(gymnasium.Env):
         super().reset(seed=seed)
         obs = self.env.reset()
         self.prev_logs = self._count_logs(obs)
-        # MineRL's image is a flipped view (negative strides) that PyTorch can't take directly
-        return np.ascontiguousarray(obs["pov"]), {}
+        return process_pov(obs["pov"]), {}
 
     def step(self, index):
         action = self._make_action(index)
@@ -128,7 +142,7 @@ class TreechopEnv(gymnasium.Env):
                 self.env.render()
             if done:
                 break
-        return np.ascontiguousarray(obs["pov"]), total_reward, done, False, {"logs": self.prev_logs}
+        return process_pov(obs["pov"]), total_reward, done, False, {"logs": self.prev_logs}
 
     def close(self):
         self.env.close()

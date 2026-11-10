@@ -1,5 +1,5 @@
 """
-See exactly what the agent sees: the same 64x64 images, frame skip and reward as training.
+See exactly what the agent sees: the same images, frame skip and reward as training.
 
   python debug_view.py                      # random actions
   python debug_view.py --model latest       # actions from the newest saved model in models/
@@ -23,7 +23,7 @@ ACTION_NAMES = ["forward", "forward+jump", "stand still", "turn left",
 
 
 def annotate(pov, scale, step, action, reward, logs, total):
-    """Enlarge the 64x64 observation (nearest-neighbor, so pixels stay sharp) and add a text bar."""
+    """Enlarge the observation (nearest-neighbor, so pixels stay sharp) and add a text bar."""
     big = cv2.resize(pov, (pov.shape[1] * scale, pov.shape[0] * scale), interpolation=cv2.INTER_NEAREST)
     big = cv2.cvtColor(big, cv2.COLOR_RGB2BGR)  # MineRL gives RGB, OpenCV draws BGR
     bar = np.zeros((70, big.shape[1], 3), dtype=np.uint8)
@@ -39,7 +39,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=None, help='"latest", a .zip path, or omit for random actions')
     parser.add_argument("--steps", type=int, default=2000, help="agent steps to run (one episode is 2000)")
-    parser.add_argument("--scale", type=int, default=8, help="how much to enlarge the 64x64 image")
+    parser.add_argument("--scale", type=int, default=6, help="how much to enlarge the agent's image")
     parser.add_argument("--delay", type=int, default=50, help="ms to wait between frames")
     parser.add_argument("--save-every", type=int, default=0, help="save every Nth frame to debug_frames/ (0 = off)")
     parser.add_argument("--no-window", action="store_true", help="don't open a window")

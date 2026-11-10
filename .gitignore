@@ -5,3 +5,5 @@ __pycache__/
 models/
 tb_logs/
 debug_frames/
+models_*/
+tb_logs_*/
