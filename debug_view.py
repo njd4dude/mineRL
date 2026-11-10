@@ -39,7 +39,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=None, help='"latest", a .zip path, or omit for random actions')
     parser.add_argument("--steps", type=int, default=2000, help="agent steps to run (one episode is 2000)")
-    parser.add_argument("--scale", type=int, default=6, help="how much to enlarge the agent's image")
+    parser.add_argument("--scale", type=int, default=8, help="how much to enlarge the agent's image")
     parser.add_argument("--delay", type=int, default=50, help="ms to wait between frames")
     parser.add_argument("--save-every", type=int, default=0, help="save every Nth frame to debug_frames/ (0 = off)")
     parser.add_argument("--no-window", action="store_true", help="don't open a window")

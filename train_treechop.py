@@ -9,7 +9,8 @@ Train an agent to chop trees in MineRLTreechop-v0 using PPO (reinforcement learn
   tensorboard --logdir tb_logs             # view training graphs (in another terminal)
 
 How it learns:
-  - Each step the agent sees a small 128x56 image of the world and picks one of a few simple actions.
+  - Each step the agent sees a small 64x64 image of the world (HUD cropped off) and picks one of a
+    few simple actions.
   - It gets +1 reward for each log collected.
   - PPO adjusts the neural network so actions that led to logs become more likely.
 """
@@ -67,7 +68,8 @@ ENV_NAME = "MineRLTreechopInventory320-v0"
 # HUD rows at the bottom, and shrink what's left to a small image for the network.
 RENDER_RES = (320, 180)      # (width, height) Minecraft draws at
 HUD_TOP_ROW = 138            # at 320x180 the HUD starts around row 140; keep rows above this
-OBS_W, OBS_H = 128, 56       # what the network sees; keeps the 320x138 aspect ratio (~2.3:1)
+OBS_W, OBS_H = 64, 64        # what the network sees; squashes the 320x138 view sideways, which is
+                             # fine as long as training and playing use the same processing
 
 
 def process_pov(pov):
@@ -236,7 +238,7 @@ def watch(episodes, model_path=None):
     print(f"Loading {path}")
     model = PPO.load(path, device="cuda")
     env = TreechopEnv(render=True)
-    # Saved models store the image shape channels-first, e.g. (3, 56, 128)
+    # Saved models store the image shape channels-first, e.g. (3, 64, 64)
     if model.observation_space.shape not in ((OBS_H, OBS_W, 3), (3, OBS_H, OBS_W)):
         print(f"This model was trained on images of shape {model.observation_space.shape}, but the "
               f"environment now gives {env.observation_space.shape}. It can't be used with this version.")
