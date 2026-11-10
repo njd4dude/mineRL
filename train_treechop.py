@@ -30,6 +30,8 @@ import gym  # MineRL uses the old gym library
 import gymnasium  # Stable-Baselines3 uses the newer gymnasium library
 import minerl  # noqa: F401  (registers the MineRL envs)
 import numpy as np
+from minerl.herobraine.env_specs.treechop_specs import Treechop
+from minerl.herobraine.hero import handlers as H
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback
 from stable_baselines3.common.monitor import Monitor
@@ -53,13 +55,39 @@ ACTIONS = [
 ]
 
 
+# Minecraft 1.16 has a separate item for each wood type
+LOG_ITEMS = ["acacia_log", "birch_log", "dark_oak_log", "jungle_log", "oak_log", "spruce_log"]
+LOGS_TO_WIN = 64
+ENV_NAME = "MineRLTreechopInventory-v0"
+
+
+class TreechopWithInventory(Treechop):
+    """MineRL 1.0's Treechop never gives any reward: its reward looks for the old item name "log"
+    (Minecraft 1.16 uses "oak_log" etc.), and MineRL 1.0's Minecraft mod has no reward code at all.
+    This version also reports the log counts in the inventory, so we can compute the reward ourselves
+    (the same way MineRL's own ObtainDiamondShovel does)."""
+
+    def create_observables(self):
+        return super().create_observables() + [H.FlatInventoryObservation(LOG_ITEMS)]
+
+
+def register_env():
+    try:
+        gym.spec(ENV_NAME)
+    except gym.error.Error:
+        TreechopWithInventory(name=ENV_NAME).register()
+
+
 class TreechopEnv(gymnasium.Env):
     """Wraps MineRL Treechop so Stable-Baselines3 can use it:
-    image-only observations, a few discrete actions, and each action held for several game steps."""
+    image-only observations, a few discrete actions, and each action held for several game steps.
+    Reward: +1 for each log added to the inventory (computed here, since MineRL's is always 0)."""
 
     def __init__(self, frame_skip=4, render=False):
         super().__init__()
-        self.env = gym.make("MineRLTreechop-v0")
+        register_env()  # runs in each worker process too
+        self.env = gym.make(ENV_NAME)
+        self.prev_logs = 0
         self.frame_skip = frame_skip
         self.render_enabled = render
         self.observation_space = gymnasium.spaces.Box(0, 255, (64, 64, 3), dtype=np.uint8)
@@ -72,9 +100,14 @@ class TreechopEnv(gymnasium.Env):
             action[key] = np.array(value) if key == "camera" else value
         return action
 
+    @staticmethod
+    def _count_logs(obs):
+        return sum(int(obs["inventory"][item]) for item in LOG_ITEMS)
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         obs = self.env.reset()
+        self.prev_logs = self._count_logs(obs)
         return obs["pov"], {}
 
     def step(self, index):
@@ -82,13 +115,19 @@ class TreechopEnv(gymnasium.Env):
         total_reward = 0.0
         done = False
         for _ in range(self.frame_skip):
-            obs, reward, done, info = self.env.step(action)
-            total_reward += reward
+            obs, _, done, info = self.env.step(action)  # MineRL's own reward is always 0 here
+            logs = self._count_logs(obs)
+            # +1 per log beyond the most held so far this episode, so logs are never counted twice
+            # (e.g. if the inventory reading drops, or the agent dies and picks logs back up)
+            total_reward += max(logs - self.prev_logs, 0)
+            self.prev_logs = max(self.prev_logs, logs)
+            if logs >= LOGS_TO_WIN:
+                done = True
             if self.render_enabled:
                 self.env.render()
             if done:
                 break
-        return obs["pov"], total_reward, done, False, {}
+        return obs["pov"], total_reward, done, False, {"logs": self.prev_logs}
 
     def close(self):
         self.env.close()
