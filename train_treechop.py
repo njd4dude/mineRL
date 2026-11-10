@@ -1,12 +1,15 @@
 """
 Train an agent to chop trees in MineRLTreechop-v0 using PPO (reinforcement learning).
 
-  python train_treechop.py                 # train (resumes from the latest save if there is one)
+  python train_treechop.py                 # start a NEW run in runs/model_<date>_<time>/
+  python train_treechop.py --name test1    # new run with a label: runs/model_<date>_<time>_test1/
+  python train_treechop.py --resume        # continue the latest run
+  python train_treechop.py --resume runs/model_20261109_163045   # continue a specific run
   python train_treechop.py --envs 3        # change how many Minecraft instances run in parallel (default 4)
   python train_treechop.py --cpu-render    # draw Minecraft on the CPU instead of the GPU
-  python train_treechop.py --watch         # watch the trained agent play
-  python train_treechop.py --watch --model models/treechop_ckpt_50000_steps.zip   # watch a specific checkpoint
-  tensorboard --logdir tb_logs             # view training graphs (in another terminal)
+  python train_treechop.py --watch         # watch the newest model of the latest run
+  python train_treechop.py --watch --model runs/model_20261109_163045/treechop_ckpt_50000_steps.zip
+  tensorboard --logdir runs                # view and compare all runs' training graphs
 
 How it learns:
   - Each step the agent sees a small 64x64 image of the world (HUD cropped off) and picks one of a
@@ -17,9 +20,11 @@ How it learns:
 import argparse
 import functools
 import glob
+import json
 import logging
 import os
 import sys
+from datetime import datetime
 
 # In WSL, OpenGL defaults to "llvmpipe" (drawing on the CPU). These settings make Minecraft draw
 # on the NVIDIA GPU through Windows DirectX 12 instead. Set before any Minecraft starts, so every
@@ -42,8 +47,10 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 logging.basicConfig(level=logging.WARNING)
 
-MODEL_DIR = "models"
-FINAL_MODEL = os.path.join(MODEL_DIR, "treechop_ppo.zip")
+# Every training run gets its own folder: runs/model_<date>_<time>[_<name>]/ holding its
+# checkpoints, final model, TensorBoard logs (tb/) and settings (config.json).
+RUNS_DIR = "runs"
+FINAL_NAME = "final.zip"
 
 # A small set of actions makes learning much easier than MineRL's full action space.
 # The agent always holds "attack", so it only has to learn where to go and look.
@@ -151,10 +158,37 @@ class TreechopEnv(gymnasium.Env):
         self.env.close()
 
 
-def latest_model():
-    """Return the newest saved model (final or checkpoint), or None."""
-    files = glob.glob(os.path.join(MODEL_DIR, "*.zip"))
+def new_run_dir(name=None):
+    """Create runs/model_<date>_<time>[_<name>]/ for a new training run."""
+    folder = "model_" + datetime.now().strftime("%Y%m%d_%H%M%S") + (f"_{name}" if name else "")
+    path = os.path.join(RUNS_DIR, folder)
+    os.makedirs(path)
+    return path
+
+
+def latest_run():
+    """The most recently used run folder, or None."""
+    runs = [d for d in glob.glob(os.path.join(RUNS_DIR, "*")) if os.path.isdir(d)]
+    return max(runs, key=os.path.getmtime) if runs else None
+
+
+def latest_model(run_dir=None):
+    """Newest saved model (final or checkpoint) in a run folder (default: the latest run), or None."""
+    run_dir = run_dir or latest_run()
+    if not run_dir:
+        return None
+    files = glob.glob(os.path.join(run_dir, "*.zip"))
     return max(files, key=os.path.getmtime) if files else None
+
+
+def resolve_model(arg=None):
+    """Turn a --model value into a .zip path: None/"latest" = newest model in the latest run,
+    a run folder = newest model in that folder, a .zip = that file."""
+    if arg in (None, "latest"):
+        return latest_model()
+    if os.path.isdir(arg):
+        return latest_model(arg)
+    return arg
 
 
 def set_minecraft_memory(max_mem):
@@ -182,7 +216,23 @@ def make_env(mc_mem=None):
     return Monitor(TreechopEnv())
 
 
-def train(timesteps, n_steps, n_envs, mc_mem=None):
+def train(timesteps, n_steps, n_envs, mc_mem=None, resume=None, name=None):
+    # Pick the run folder: continue an existing run, or start a new one
+    if resume:
+        run_dir = latest_run() if resume == "latest" else resume
+        path = latest_model(run_dir) if run_dir else None
+        if not path:
+            print(f"Nothing to resume: no saved model found in {run_dir or RUNS_DIR + '/'}")
+            return
+    else:
+        run_dir, path = new_run_dir(name), None
+        with open(os.path.join(run_dir, "config.json"), "w") as f:
+            json.dump({"env": ENV_NAME, "render_res": RENDER_RES, "hud_top_row": HUD_TOP_ROW,
+                       "obs_size": [OBS_W, OBS_H], "frame_skip": 4, "actions": ACTIONS,
+                       "envs": n_envs, "n_steps": n_steps, "mc_mem": mc_mem,
+                       "started": datetime.now().isoformat(timespec="seconds")}, f, indent=2)
+    print(f"Run folder: {run_dir}")
+
     env_fn = functools.partial(make_env, mc_mem)
     if n_envs == 1:
         env = DummyVecEnv([env_fn])
@@ -192,10 +242,16 @@ def train(timesteps, n_steps, n_envs, mc_mem=None):
     print(f"Running {n_envs} Minecraft instance(s) with {mc_mem or '4G (default)'} memory each, "
           f"{n_steps} steps each per update ({n_steps * n_envs} steps per update)")
 
-    path = latest_model()
+    tb_dir = os.path.join(run_dir, "tb")
     if path:
         print(f"Resuming from {path}")
-        model = PPO.load(path, env=env, device="cuda")
+        try:
+            model = PPO.load(path, env=env, device="cuda")
+        except ValueError as e:  # e.g. the run used a different image size
+            print(f"Can't resume this run with the current settings: {e}")
+            env.close()
+            return
+        model.tensorboard_log = tb_dir  # keep logging into this run's folder
     else:
         print("Starting a new model")
         model = PPO(
@@ -206,31 +262,32 @@ def train(timesteps, n_steps, n_envs, mc_mem=None):
             learning_rate=2.5e-4,
             ent_coef=0.01,  # encourages trying different actions
             verbose=1,
-            tensorboard_log="tb_logs",
+            tensorboard_log=tb_dir,
             device="cuda",
         )
 
     # save_freq counts per environment, so divide to save about every 10,000 total steps
-    checkpoint = CheckpointCallback(save_freq=max(10_000 // n_envs, 1), save_path=MODEL_DIR,
+    checkpoint = CheckpointCallback(save_freq=max(10_000 // n_envs, 1), save_path=run_dir,
                                     name_prefix="treechop_ckpt")
     try:
-        model.learn(total_timesteps=timesteps, callback=checkpoint, reset_num_timesteps=False)
+        model.learn(total_timesteps=timesteps, callback=checkpoint, reset_num_timesteps=False,
+                    tb_log_name="PPO")
     except KeyboardInterrupt:
         print("\nStopped by Ctrl+C")
     finally:
-        os.makedirs(MODEL_DIR, exist_ok=True)
-        model.save(FINAL_MODEL)
-        print(f"Saved model to {FINAL_MODEL}")
+        final = os.path.join(run_dir, FINAL_NAME)
+        model.save(final)
+        print(f"Saved model to {final}")
         try:
             env.close()
         except Exception:
             pass  # after Ctrl+C the Minecraft processes may already be gone
 
 
-def watch(episodes, model_path=None):
-    path = model_path or latest_model()
+def watch(episodes, model_arg=None):
+    path = resolve_model(model_arg)
     if not path:
-        print("No trained model found in models/. Train first.")
+        print(f"No trained model found in {model_arg or RUNS_DIR + '/'}. Train first.")
         return
     if not os.path.exists(path):
         print(f"Model file not found: {path}")
@@ -273,10 +330,14 @@ if __name__ == "__main__":
                         help="Java memory limit per Minecraft (MineRL's own default is 4G); try 3G if it crashes")
     parser.add_argument("--episodes", type=int, default=3, help="episodes to watch")
     parser.add_argument("--model", default=None,
-                        help="with --watch: a specific .zip checkpoint (default: newest in models/)")
+                        help="with --watch: a .zip checkpoint or a run folder (default: newest model in the latest run)")
+    parser.add_argument("--resume", nargs="?", const="latest", default=None,
+                        help="continue a run instead of starting a new one: a run folder, or no value for the latest run")
+    parser.add_argument("--name", default=None,
+                        help="optional label added to a new run's folder name, e.g. --name smallturns")
     args = parser.parse_args()
 
     if args.watch:
         watch(args.episodes, args.model)
     else:
-        train(args.timesteps, args.n_steps, args.envs, args.mc_mem)
+        train(args.timesteps, args.n_steps, args.envs, args.mc_mem, args.resume, args.name)

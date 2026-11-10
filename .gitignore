@@ -2,8 +2,5 @@
 logs/
 __pycache__/
 .venv/
-models/
-tb_logs/
+runs/
 debug_frames/
-models_*/
-tb_logs_*/

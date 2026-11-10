@@ -2,8 +2,9 @@
 See exactly what the agent sees: the same images, frame skip and reward as training.
 
   python debug_view.py                      # random actions
-  python debug_view.py --model latest       # actions from the newest saved model in models/
-  python debug_view.py --model models/treechop_ckpt_50000_steps.zip
+  python debug_view.py --model latest       # actions from the newest model of the latest run
+  python debug_view.py --model runs/model_20261109_163045            # newest model of that run
+  python debug_view.py --model runs/model_20261109_163045/treechop_ckpt_50000_steps.zip
   python debug_view.py --save-every 10      # also save every 10th frame to debug_frames/
   python debug_view.py --no-window          # no window (e.g. just saving frames)
 
@@ -37,7 +38,8 @@ def annotate(pov, scale, step, action, reward, logs, total):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model", default=None, help='"latest", a .zip path, or omit for random actions')
+    parser.add_argument("--model", default=None,
+                        help='"latest", a run folder, a .zip path, or omit for random actions')
     parser.add_argument("--steps", type=int, default=2000, help="agent steps to run (one episode is 2000)")
     parser.add_argument("--scale", type=int, default=8, help="how much to enlarge the agent's image")
     parser.add_argument("--delay", type=int, default=50, help="ms to wait between frames")
@@ -47,9 +49,9 @@ def main():
 
     model = None
     if args.model:
-        path = T.latest_model() if args.model == "latest" else args.model
+        path = T.resolve_model(args.model)
         if not path:
-            print("No saved model found in models/")
+            print(f"No saved model found for --model {args.model}")
             return
         print(f"Using model {path}")
         model = PPO.load(path, device="cuda")
