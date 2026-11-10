@@ -86,6 +86,13 @@ def parse_ticks(jsonl_text):
 def select_chunks(ticks, n_frames, keep_s):
     """The FRAME_SKIP-tick chunks worth learning from: no menu open, player not idle, and at most
     keep_s seconds before the next log break. Returns [(start tick, ticks until break, inputs)]."""
+    return [(start, ub, inputs) for start, ub, inputs, reason in classify_chunks(ticks, n_frames, keep_s)
+            if reason is None]
+
+
+def classify_chunks(ticks, n_frames, keep_s):
+    """Every FRAME_SKIP-tick chunk with why it was dropped: [(start tick, ticks until break,
+    inputs, reason)], reason None for kept chunks (vpt_review.py shows these)."""
     _, mined = logs_mined(ticks)
     until_break = [NO_BREAK] * len(ticks)
     next_break = None
@@ -94,16 +101,22 @@ def select_chunks(ticks, n_frames, keep_s):
             next_break = i + 1
         if next_break is not None:
             until_break[i] = next_break - i
-    chosen = []
+    chunks = []
     for start in range(0, min(len(ticks), n_frames) - FRAME_SKIP + 1, FRAME_SKIP):
         chunk = ticks[start:start + FRAME_SKIP]
-        if any(t["isGuiOpen"] for t in chunk) or until_break[start] > keep_s * TICKS_PER_SEC:
-            continue
         inputs = chunk_inputs(chunk)
-        if inputs["idle"]:
-            continue
-        chosen.append((start, until_break[start], inputs))
-    return chosen
+        if any(t["isGuiOpen"] for t in chunk):
+            reason = "menu open"
+        elif until_break[start] == NO_BREAK:
+            reason = "after the last log break"
+        elif until_break[start] > keep_s * TICKS_PER_SEC:
+            reason = f"over {keep_s:g}s before a break"
+        elif inputs["idle"]:
+            reason = "idle"
+        else:
+            reason = None
+        chunks.append((start, until_break[start], inputs, reason))
+    return chunks
 
 
 def chunk_arrays(chosen):
