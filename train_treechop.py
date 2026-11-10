@@ -147,6 +147,8 @@ class TreechopEnv(gymnasium.Env):
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
+        if seed is not None:
+            self.env.seed(seed)  # same seed = same Minecraft world (MineRL only applies it to this reset)
         obs = self.env.reset()
         self.prev_logs = self._count_logs(obs)
         return process_pov(obs["pov"]), {}
