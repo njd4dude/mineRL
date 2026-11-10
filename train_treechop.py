@@ -5,6 +5,7 @@ Train an agent to chop trees in MineRLTreechop-v0 using PPO (reinforcement learn
   python train_treechop.py --envs 3        # change how many Minecraft instances run in parallel (default 4)
   python train_treechop.py --cpu-render    # draw Minecraft on the CPU instead of the GPU
   python train_treechop.py --watch         # watch the trained agent play
+  python train_treechop.py --watch --model models/treechop_ckpt_50000_steps.zip   # watch a specific checkpoint
   tensorboard --logdir tb_logs             # view training graphs (in another terminal)
 
 How it learns:
@@ -224,14 +225,23 @@ def train(timesteps, n_steps, n_envs, mc_mem=None):
             pass  # after Ctrl+C the Minecraft processes may already be gone
 
 
-def watch(episodes):
-    path = latest_model()
+def watch(episodes, model_path=None):
+    path = model_path or latest_model()
     if not path:
         print("No trained model found in models/. Train first.")
+        return
+    if not os.path.exists(path):
+        print(f"Model file not found: {path}")
         return
     print(f"Loading {path}")
     model = PPO.load(path, device="cuda")
     env = TreechopEnv(render=True)
+    # Saved models store the image shape channels-first, e.g. (3, 56, 128)
+    if model.observation_space.shape not in ((OBS_H, OBS_W, 3), (3, OBS_H, OBS_W)):
+        print(f"This model was trained on images of shape {model.observation_space.shape}, but the "
+              f"environment now gives {env.observation_space.shape}. It can't be used with this version.")
+        env.close()
+        return
     for ep in range(episodes):
         obs, _ = env.reset()
         done = False
@@ -260,9 +270,11 @@ if __name__ == "__main__":
     parser.add_argument("--mc-mem", default="2G",
                         help="Java memory limit per Minecraft (MineRL's own default is 4G); try 3G if it crashes")
     parser.add_argument("--episodes", type=int, default=3, help="episodes to watch")
+    parser.add_argument("--model", default=None,
+                        help="with --watch: a specific .zip checkpoint (default: newest in models/)")
     args = parser.parse_args()
 
     if args.watch:
-        watch(args.episodes)
+        watch(args.episodes, args.model)
     else:
         train(args.timesteps, args.n_steps, args.envs, args.mc_mem)
