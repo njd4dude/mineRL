@@ -68,6 +68,7 @@ ACTIONS = [
 # Minecraft 1.16 has a separate item for each wood type
 LOG_ITEMS = ["acacia_log", "birch_log", "dark_oak_log", "jungle_log", "oak_log", "spruce_log"]
 LOGS_TO_WIN = 64
+SPAWN_BIOME = "forest"       # Minecraft 1.16 biome category to spawn in
 ENV_NAME = "MineRLTreechopInventory320-v0"
 
 # Minecraft's HUD (hotbar, hearts, hunger, XP) has a fixed size in pixels: the hotbar alone is
@@ -94,6 +95,12 @@ class TreechopWithInventory(Treechop):
 
     def create_observables(self):
         return super().create_observables() + [H.FlatInventoryObservation(LOG_ITEMS)]
+
+    def create_agent_start(self):
+        # Treechop's own world settings (generatorOptions with "fixedBiome": 4 = forest) are in the
+        # Minecraft 1.11 format and MineRL 1.0 ignores them, so worlds were random (plains, snow...).
+        # Spawning in a forest biome is what MineRL 1.0 itself uses (BASALT's PreferredSpawnBiome).
+        return super().create_agent_start() + [H.PreferredSpawnBiome(SPAWN_BIOME)]
 
 
 def register_env():
