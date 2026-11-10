@@ -54,14 +54,17 @@ FINAL_NAME = "final.zip"
 
 # A small set of actions makes learning much easier than MineRL's full action space.
 # The agent always holds "attack", so it only has to learn where to go and look.
+# Camera values are the TOTAL turn per agent decision, in degrees [pitch, yaw]. Each decision lasts
+# frame_skip game ticks, so the turn is spread evenly over those ticks (see _make_action).
+TURN = 5
 ACTIONS = [
     {"forward": 1},                   # 0: walk forward
     {"forward": 1, "jump": 1},        # 1: walk forward + jump
     {},                               # 2: stand still (just swing)
-    {"camera": [0, -10]},             # 3: turn left
-    {"camera": [0, 10]},              # 4: turn right
-    {"camera": [-10, 0]},             # 5: look up
-    {"camera": [10, 0]},              # 6: look down
+    {"camera": [0, -TURN]},           # 3: turn left
+    {"camera": [0, TURN]},            # 4: turn right
+    {"camera": [-TURN, 0]},           # 5: look up
+    {"camera": [TURN, 0]},            # 6: look down
 ]
 
 
@@ -126,10 +129,16 @@ class TreechopEnv(gymnasium.Env):
         self.action_space = gymnasium.spaces.Discrete(len(ACTIONS))
 
     def _make_action(self, index):
+        """The MineRL action sent on each of the frame_skip ticks of one decision. Buttons are held
+        every tick; the camera turn is divided by frame_skip, because MineRL applies the camera
+        value on every tick (before this fix, "turn 10" actually turned 40 degrees)."""
         action = self.env.action_space.no_op()
         action["attack"] = 1
         for key, value in ACTIONS[index].items():
-            action[key] = np.array(value) if key == "camera" else value
+            if key == "camera":
+                action[key] = np.array(value, dtype=np.float32) / self.frame_skip
+            else:
+                action[key] = value
         return action
 
     @staticmethod
@@ -236,6 +245,7 @@ def train(timesteps, n_steps, n_envs, mc_mem=None, resume=None, name=None):
         with open(os.path.join(run_dir, "config.json"), "w") as f:
             json.dump({"env": ENV_NAME, "render_res": RENDER_RES, "hud_top_row": HUD_TOP_ROW,
                        "obs_size": [OBS_W, OBS_H], "frame_skip": 4, "actions": ACTIONS,
+                       "camera_note": "camera values are total degrees per decision",
                        "envs": n_envs, "n_steps": n_steps, "mc_mem": mc_mem,
                        "started": datetime.now().isoformat(timespec="seconds")}, f, indent=2)
     print(f"Run folder: {run_dir}")
