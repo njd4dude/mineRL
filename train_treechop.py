@@ -9,6 +9,7 @@ Train an agent to chop trees in MineRLTreechop-v0 using PPO (reinforcement learn
   python train_treechop.py --cpu-render    # draw Minecraft on the CPU instead of the GPU
   python train_treechop.py --watch         # watch the newest model of the latest run
   python train_treechop.py --watch --model runs/model_20261109_163045/treechop_ckpt_50000_steps.zip
+  python train_treechop.py --watch --record   # save each episode as an .mp4 instead of a live window
   tensorboard --logdir runs                # view and compare all runs' training graphs
 
 How it learns:
@@ -125,6 +126,7 @@ class TreechopEnv(gymnasium.Env):
         self.prev_logs = 0
         self.frame_skip = frame_skip
         self.render_enabled = render
+        self.on_frame = None  # optional function called with every full-size game frame (for recording)
         self.observation_space = gymnasium.spaces.Box(0, 255, (OBS_H, OBS_W, 3), dtype=np.uint8)
         self.action_space = gymnasium.spaces.Discrete(len(ACTIONS))
 
@@ -151,6 +153,8 @@ class TreechopEnv(gymnasium.Env):
             self.env.seed(seed)  # same seed = same Minecraft world (MineRL only applies it to this reset)
         obs = self.env.reset()
         self.prev_logs = self._count_logs(obs)
+        if self.on_frame:
+            self.on_frame(obs["pov"])
         return process_pov(obs["pov"]), {}
 
     def step(self, index):
@@ -168,6 +172,8 @@ class TreechopEnv(gymnasium.Env):
                 done = True
             if self.render_enabled:
                 self.env.render()
+            if self.on_frame:
+                self.on_frame(obs["pov"])
             if done:
                 break
         return process_pov(obs["pov"]), total_reward, done, False, {"logs": self.prev_logs}
@@ -303,7 +309,21 @@ def train(timesteps, n_steps, n_envs, mc_mem=None, resume=None, name=None):
             pass  # after Ctrl+C the Minecraft processes may already be gone
 
 
-def watch(episodes, model_arg=None):
+VIDEO_FPS = 20     # Minecraft runs 20 ticks per second, so this plays back at normal game speed
+VIDEO_SCALE = 3    # 320x180 -> 960x540; scaled up with sharp pixels so players don't blur it
+
+
+def open_video(path):
+    """An OpenCV video writer for an .mp4 file. Uses MPEG-4 (mp4v): the pip OpenCV has no H.264
+    encoder. Plays in VLC and the Windows Media Player / Movies & TV apps."""
+    size = (RENDER_RES[0] * VIDEO_SCALE, RENDER_RES[1] * VIDEO_SCALE)
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), VIDEO_FPS, size)
+    if not writer.isOpened():
+        raise RuntimeError(f"OpenCV can't write .mp4 files here ({path})")
+    return writer
+
+
+def watch(episodes, model_arg=None, record=False):
     path = resolve_model(model_arg)
     if not path:
         print(f"No trained model found in {model_arg or RUNS_DIR + '/'}. Train first.")
@@ -313,25 +333,53 @@ def watch(episodes, model_arg=None):
         return
     print(f"Loading {path}")
     model = PPO.load(path, device="cuda")
-    env = TreechopEnv(render=True)
+    env = TreechopEnv(render=not record)
     # Saved models store the image shape channels-first, e.g. (3, 64, 64)
     if model.observation_space.shape not in ((OBS_H, OBS_W, 3), (3, OBS_H, OBS_W)):
         print(f"This model was trained on images of shape {model.observation_space.shape}, but the "
               f"environment now gives {env.observation_space.shape}. It can't be used with this version.")
         env.close()
         return
-    for ep in range(episodes):
-        obs, _ = env.reset()
-        done = False
-        total = 0.0
-        while not done:
-            action, _ = model.predict(obs, deterministic=False)
-            obs, reward, done, _, _ = env.step(int(action))
-            total += reward
-            if reward > 0:
-                print(f"  got {reward:.0f} log(s), total = {total:.0f}")
-        print(f"Episode {ep + 1}: {total:.0f} logs")
-    env.close()
+    video_dir = os.path.join(os.path.dirname(path), "videos")
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    writer = None
+
+    def write_frame(pov):
+        big = cv2.resize(pov, None, fx=VIDEO_SCALE, fy=VIDEO_SCALE, interpolation=cv2.INTER_NEAREST)
+        writer.write(cv2.cvtColor(big, cv2.COLOR_RGB2BGR))  # OpenCV expects BGR
+
+    try:
+        for ep in range(episodes):
+            if record:
+                os.makedirs(video_dir, exist_ok=True)
+                name = os.path.splitext(os.path.basename(path))[0]
+                video_path = os.path.join(video_dir, f"{name}_{stamp}_ep{ep + 1}.mp4")
+                writer = open_video(video_path)
+                env.on_frame = write_frame
+            obs, _ = env.reset()
+            done = False
+            total = 0.0
+            while not done:
+                action, _ = model.predict(obs, deterministic=False)
+                obs, reward, done, _, _ = env.step(int(action))
+                total += reward
+                if reward > 0:
+                    print(f"  got {reward:.0f} log(s), total = {total:.0f}")
+            print(f"Episode {ep + 1}: {total:.0f} logs")
+            if writer:
+                writer.release()
+                writer = None
+                print(f"  saved video to {video_path}")
+    except KeyboardInterrupt:
+        print("\nStopped by Ctrl+C")
+    finally:
+        if writer:
+            writer.release()  # keep the part of the episode recorded so far
+            print(f"  saved partial video to {video_path}")
+        try:
+            env.close()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
@@ -348,6 +396,8 @@ if __name__ == "__main__":
     parser.add_argument("--mc-mem", default="2G",
                         help="Java memory limit per Minecraft (MineRL's own default is 4G); try 3G if it crashes")
     parser.add_argument("--episodes", type=int, default=3, help="episodes to watch")
+    parser.add_argument("--record", action="store_true",
+                        help="with --watch: save each episode as an .mp4 in the run's videos/ folder (no live window)")
     parser.add_argument("--model", default=None,
                         help="with --watch: a .zip checkpoint or a run folder (default: newest model in the latest run)")
     parser.add_argument("--resume", nargs="?", const="latest", default=None,
@@ -357,6 +407,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.watch:
-        watch(args.episodes, args.model)
+        watch(args.episodes, args.model, args.record)
     else:
         train(args.timesteps, args.n_steps, args.envs, args.mc_mem, args.resume, args.name)
