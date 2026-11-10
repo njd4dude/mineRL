@@ -19,8 +19,6 @@ from stable_baselines3 import PPO
 
 import train_treechop as T  # same env wrapper, actions and settings as training
 
-ACTION_NAMES = ["forward", "forward+jump", "stand still", "turn left",
-                "turn right", "look up", "look down"]
 
 
 def annotate(pov, scale, step, action, reward, logs, total):
@@ -28,7 +26,7 @@ def annotate(pov, scale, step, action, reward, logs, total):
     big = cv2.resize(pov, (pov.shape[1] * scale, pov.shape[0] * scale), interpolation=cv2.INTER_NEAREST)
     big = cv2.cvtColor(big, cv2.COLOR_RGB2BGR)  # MineRL gives RGB, OpenCV draws BGR
     bar = np.zeros((70, big.shape[1], 3), dtype=np.uint8)
-    lines = [f"step {step}   action: {ACTION_NAMES[action] if action is not None else '-'} (+attack)",
+    lines = [f"step {step}   action: {T.describe_action(action) if action is not None else '-'} (+attack)",
              f"reward {reward:.0f}   logs this episode {logs}   total reward {total:.0f}"]
     for i, text in enumerate(lines):
         color = (0, 255, 0) if reward > 0 and i == 1 else (255, 255, 255)
@@ -55,6 +53,10 @@ def main():
             return
         print(f"Using model {path}")
         model = PPO.load(path, device="cuda")
+        problem = T.model_mismatch(model)
+        if problem:
+            print(problem)
+            return
     else:
         print("Using random actions")
 
@@ -79,7 +81,6 @@ def main():
 
             if model is not None:
                 action, _ = model.predict(obs, deterministic=False)
-                action = int(action)
             else:
                 action = env.action_space.sample()
             obs, reward, done, _, info = env.step(action)

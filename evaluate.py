@@ -44,9 +44,9 @@ def _run_job(job):
     info = {"logs": 0}
     for _ in range(steps):
         if path is None:
-            action = rng.randint(len(T.ACTIONS))
+            action = [rng.randint(n) for n in T.ACTION_DIMS]
         else:
-            action = int(_models[path].predict(obs, deterministic=False)[0])
+            action = _models[path].predict(obs, deterministic=False)[0]
         obs, _, done, _, info = _env.step(action)
         if done:
             break
@@ -77,6 +77,11 @@ def main():
         path = None if arg == "random" else T.resolve_model(arg)
         if arg != "random" and (not path or not os.path.exists(path)):
             print(f"Skipping {arg}: no model found")
+            continue
+        from stable_baselines3 import PPO
+        problem = path and T.model_mismatch(PPO.load(path, device="cpu"))
+        if problem:
+            print(f"Skipping {arg}: {problem}")
             continue
         policies.append((label_for(arg, path), path))
 
