@@ -108,7 +108,8 @@ class TreechopEnv(gymnasium.Env):
         super().reset(seed=seed)
         obs = self.env.reset()
         self.prev_logs = self._count_logs(obs)
-        return obs["pov"], {}
+        # MineRL's image is a flipped view (negative strides) that PyTorch can't take directly
+        return np.ascontiguousarray(obs["pov"]), {}
 
     def step(self, index):
         action = self._make_action(index)
@@ -127,7 +128,7 @@ class TreechopEnv(gymnasium.Env):
                 self.env.render()
             if done:
                 break
-        return obs["pov"], total_reward, done, False, {"logs": self.prev_logs}
+        return np.ascontiguousarray(obs["pov"]), total_reward, done, False, {"logs": self.prev_logs}
 
     def close(self):
         self.env.close()
