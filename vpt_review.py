@@ -24,6 +24,7 @@ import json
 import os
 import random
 import tempfile
+import urllib.error
 
 import cv2
 import numpy as np
@@ -211,22 +212,38 @@ def main():
     done = set(kept) | set(skipped)
     unseen = [n for n in by_name if n.startswith("treechop-") and n not in done]
 
-    names = list(args.segments)
-    names += rng.sample(kept, min(args.kept or 0, len(kept)))
-    names += rng.sample(skipped, min(args.skipped or 0, len(skipped)))
-    names += rng.sample(unseen, min(args.new, len(unseen)))
     os.makedirs(OUT_DIR, exist_ok=True)
-    for name in names:
+
+    def try_review(name):
+        """True if a review video was made."""
         if name not in by_name:
             print(f"{name}: not in the VPT index")
-            continue
+            return False
         npz = os.path.join(V.OUT_DIR, name + ".npz")
         stored = np.load(npz) if os.path.exists(npz) else None
         try:
             review(by_name[name], index["basedir"], args, stored)
+            return True
+        except urllib.error.HTTPError as e:
+            print(f"{name}: no longer on the VPT server ({e.code})" + ("; picking another" if random_pick else ""))
         except Exception as e:
             print(f"{name}: {type(e).__name__}: {e}")
+        return False
 
+    random_pick = False
+    for name in args.segments:
+        try_review(name)
+    # random picks: keep drawing until the requested number are made (about a third of the VPT
+    # files are gone from the server)
+    random_pick = True
+    for pool, want in ((kept, args.kept or 0), (skipped, args.skipped or 0), (unseen, args.new)):
+        made = 0
+        for name in rng.sample(pool, len(pool)):
+            if made >= want:
+                break
+            made += try_review(name)
+        if made < want:
+            print(f"only {made} of {want} could be reviewed")
 
 if __name__ == "__main__":
     main()
