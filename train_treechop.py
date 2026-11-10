@@ -12,8 +12,8 @@ Train an agent to chop trees in MineRLTreechop-v0 using PPO (reinforcement learn
   tensorboard --logdir runs                # view and compare all runs' training graphs
 
 To see how a model plays:
-  python debug_view.py --model latest      # live window of what the agent sees
   python evaluate.py --models latest --record   # score it on fixed worlds and save each game as .mp4
+  python evaluate.py --models latest --seeds 7 --workers 1 --record   # just one game, to debug it
 
 How it learns:
   - Each step the agent sees a small 64x64 image of the world (HUD cropped off) and picks one of a

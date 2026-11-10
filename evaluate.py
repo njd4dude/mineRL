@@ -6,11 +6,16 @@ random-action baseline, and print logs collected per world.
   python evaluate.py --models random latest --seeds 1 2 3 4 5 6 7 8 --steps 2000
   python evaluate.py --models random latest --workers 4      # faster if nothing else is running
   python evaluate.py --models latest --record                # also save every game as an .mp4
+  python evaluate.py --models latest --record --video agent  # video of only what the agent sees
+  python evaluate.py --models random --seeds 7 --workers 1 --record   # one game, e.g. to debug the env
 
 Each model can be "random", "latest", a run folder (its newest model) or a .zip checkpoint.
 Results are also saved to runs/evals/<date>_<time>.json. With --record, every game is also saved to
-runs/evals/<date>_<time>_videos/<policy>_seed<N>.mp4, showing the game, the step, logs so far, the
-chosen action, and (top right) the 64x64 image the agent actually sees.
+runs/evals/<date>_<time>_videos/<policy>_seed<N>.mp4, with the step, logs so far, the chosen action
+and how the game ended. --video picks the layout:
+  both  (default) the full game frame and, beside it, the 64x64 image the agent actually sees
+  game  only the full game frame, as a player would see it
+  agent only the agent's 64x64 view, enlarged 8x (what the network gets: no HUD, squashed)
 """
 import argparse
 import json
@@ -24,22 +29,70 @@ import numpy as np
 
 import train_treechop as T
 
-# Videos (--record): a 1000-step game is 4000 game ticks, so keep them small: 640x360 (320x180
-# scaled up with sharp pixels), every 2nd game tick at 10 fps, which still plays at real game
-# speed (Minecraft runs 20 ticks per second). About 80 MB per game.
-VIDEO_SCALE = 2
+# Videos (--record): a 1000-step game is 4000 game ticks, so keep them small: every 2nd game tick
+# at 10 fps, which still plays at real game speed (Minecraft runs 20 ticks per second).
 VIDEO_TICK_STRIDE = 2
 VIDEO_FPS = 20 // VIDEO_TICK_STRIDE
+GAME_SCALE = 2       # the 320x180 game frame is shown at 640x360
+AGENT_BIG = 512      # --video agent: the 64x64 view enlarged 8x
+BAR_H = 60           # --video agent: text bar under the view
+VIDEO_LAYOUTS = ["both", "game", "agent"]
 
 
-def open_video(path):
+def _bgr(img):
+    return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)   # MineRL gives RGB, OpenCV writes BGR
+
+
+def _enlarge(img, w, h):
+    return cv2.resize(img, (w, h), interpolation=cv2.INTER_NEAREST)   # sharp pixels, no blur
+
+
+def _text(frame, lines, x, y, scale=0.5, color=(255, 255, 255), thick=1):
+    for i, line in enumerate(lines):
+        cv2.putText(frame, line, (x, y + int(40 * scale) * i), cv2.FONT_HERSHEY_SIMPLEX, scale, color,
+                    thick, cv2.LINE_AA)
+
+
+def video_size(layout):
+    gw, gh = T.RENDER_RES[0] * GAME_SCALE, T.RENDER_RES[1] * GAME_SCALE
+    return {"game": (gw, gh), "both": (gw + gh, gh), "agent": (AGENT_BIG, AGENT_BIG + BAR_H)}[layout]
+
+
+def render_frame(layout, pov, step, steps, logs, action, ending=None):
+    """One video frame. pov is the full 320x180 game frame; the agent's view is made from it with
+    the same process_pov the env uses, so it is exactly the image the network got."""
+    act = T.describe_action(action) if action is not None else "-"
+    lines = [f"step {step}/{steps}   logs {logs}", f"action: {act}"]
+    agent = _bgr(T.process_pov(pov))
+    gw, gh = T.RENDER_RES[0] * GAME_SCALE, T.RENDER_RES[1] * GAME_SCALE
+    if layout == "agent":
+        frame = np.zeros((AGENT_BIG + BAR_H, AGENT_BIG, 3), np.uint8)
+        frame[:AGENT_BIG] = _enlarge(agent, AGENT_BIG, AGENT_BIG)
+        _text(frame, lines, 8, AGENT_BIG + 22)
+    else:
+        game = _enlarge(_bgr(pov), gw, gh)
+        if layout == "game":
+            frame = game
+        else:   # both: game on the left, the agent's view (same height) on the right
+            frame = np.hstack([game, _enlarge(agent, gh, gh)])
+            cv2.rectangle(frame, (gw, gh - 24), (gw + gh, gh), (0, 0, 0), -1)
+            _text(frame, ["what the agent sees (64x64)"], gw + 8, gh - 7)
+        cv2.rectangle(frame, (0, 0), (390, 46), (0, 0, 0), -1)
+        _text(frame, lines, 8, 19)
+    if ending:
+        y = AGENT_BIG - 16 if layout == "agent" else gh - 40
+        _text(frame, [f"END: {ending}"], 8, y, scale=0.9, color=(0, 0, 255), thick=2)
+    return frame
+
+
+def open_video(path, layout):
     """An OpenCV video writer for an .mp4 file. Uses MPEG-4 (mp4v): the pip OpenCV has no H.264
     encoder. Plays in VLC and the Windows Media Player / Movies & TV apps."""
-    size = (T.RENDER_RES[0] * VIDEO_SCALE, T.RENDER_RES[1] * VIDEO_SCALE)
-    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), VIDEO_FPS, size)
+    writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), VIDEO_FPS, video_size(layout))
     if not writer.isOpened():
         raise RuntimeError(f"OpenCV can't write .mp4 files here ({path})")
     return writer
+
 
 _env = None      # one Minecraft per worker process, reused for every job
 _models = {}     # loaded models per worker, by path
@@ -51,23 +104,10 @@ def _init_worker(mc_mem):
     _env = T.TreechopEnv()
 
 
-def _annotate(pov, step, steps, logs, action):
-    """Full game frame enlarged, with a text bar and the agent's own 64x64 view in the corner."""
-    big = cv2.resize(pov, None, fx=VIDEO_SCALE, fy=VIDEO_SCALE, interpolation=cv2.INTER_NEAREST)
-    big = cv2.cvtColor(big, cv2.COLOR_RGB2BGR)
-    agent_view = cv2.resize(T.process_pov(pov), (128, 128), interpolation=cv2.INTER_NEAREST)
-    big[6:134, -134:-6] = cv2.cvtColor(agent_view, cv2.COLOR_RGB2BGR)
-    cv2.rectangle(big, (0, 0), (390, 46), (0, 0, 0), -1)
-    act = T.describe_action(action) if action is not None else "-"
-    for i, text in enumerate([f"step {step}/{steps}   logs {logs}", f"action: {act}"]):
-        cv2.putText(big, text, (8, 19 + 20 * i), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA)
-    return big
-
-
 def _run_job(job):
     """Play one policy on one seeded world. Returns (policy label, seed, logs, seconds, step it died
     at or None)."""
-    label, path, seed, steps, video_path = job
+    label, path, seed, steps, video_path, layout = job
     import torch
     from stable_baselines3 import PPO
     start = time.time()
@@ -79,13 +119,14 @@ def _run_job(job):
     state = {"step": 0, "action": None, "tick": 0}   # what to draw on each recorded frame
     info = {"logs": 0}
     if video_path:
-        writer = open_video(video_path)
+        writer = open_video(video_path, layout)
 
         def on_frame(pov):
             state["last_pov"] = pov
             state["last_written"] = state["tick"] % VIDEO_TICK_STRIDE == 0
             if state["last_written"]:
-                writer.write(_annotate(pov, state["step"], steps, _env.prev_logs, state["action"]))  # updated every tick
+                # _env.prev_logs (not info) is updated every tick, so the count is never a step behind
+                writer.write(render_frame(layout, pov, state["step"], steps, _env.prev_logs, state["action"]))
             state["tick"] += 1
         _env.on_frame = on_frame
     try:
@@ -108,9 +149,8 @@ def _run_job(job):
                 ending = ("DIED (lost the axe)" if info.get("died") else
                           "Minecraft failed" if info.get("env_error") else
                           f"won: {T.LOGS_TO_WIN} logs" if info["logs"] >= T.LOGS_TO_WIN else "out of steps")
-                frame = _annotate(state["last_pov"], state["step"], steps, _env.prev_logs, state["action"])
-                cv2.putText(frame, f"END: {ending}", (8, frame.shape[0] - 70), cv2.FONT_HERSHEY_SIMPLEX,
-                            0.9, (0, 0, 255), 2, cv2.LINE_AA)
+                frame = render_frame(layout, state["last_pov"], state["step"], steps, _env.prev_logs,
+                                     state["action"], ending=ending)
                 for _ in range(2 * VIDEO_FPS):
                     writer.write(frame)
             writer.release()
@@ -139,6 +179,9 @@ def main():
     parser.add_argument("--mc-mem", default="2G")
     parser.add_argument("--record", action="store_true",
                         help="save every game as an .mp4 in runs/evals/<date>_<time>_videos/")
+    parser.add_argument("--video", choices=VIDEO_LAYOUTS, default="both",
+                        help="with --record: both = game + agent's view side by side, game = only the game, "
+                             "agent = only what the agent sees")
     args = parser.parse_args()
 
     policies = []
@@ -173,7 +216,7 @@ def main():
     def video_for(label, seed):
         return os.path.join(video_dir, f"{label.replace('/', '_')}_seed{seed}.mp4") if video_dir else None
 
-    jobs = [(label, path, seed, args.steps, video_for(label, seed))
+    jobs = [(label, path, seed, args.steps, video_for(label, seed), args.video)
             for label, path in policies for seed in args.seeds]
     print(f"{len(policies)} policies x {len(args.seeds)} worlds = {len(jobs)} episodes of "
           f"{args.steps} steps, {args.workers} Minecraft instance(s)")
