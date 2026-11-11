@@ -3,7 +3,17 @@
 Ideas for what to try next, based on the results in [EXPERIMENTS.md](EXPERIMENTS.md).
 Roughly in the order I'd try them.
 
-## Where we are (Nov 10, 2026)
+## Update (Nov 11, 2026): more VPT data
+
+- BC on all 1,603 treechop segments (`bc_all`): **26.5** logs per game (BC on 304 segments: 18.7).
+- BC on treechop + 8.x (`bc_tc_8xx`, 1.13M examples): **38.3**, no deaths, better than the
+  fine-tuned `finetune_kl05` (34.3) with no PPO at all. So more data is the biggest win so far.
+- Downloading 7.x, 10.x and 9.x as well (`logs/download_all.sh`, resumable), into data/vpt_<N>xx.
+- Next: fine-tune `bc_tc_8xx` with PPO (same settings as `finetune_kl05`); BC on all versions once
+  the downloads finish; re-run the downloader once more to retry the ~1% that failed on a
+  cut-off or non-UTF-8 action log (fixed in vpt_data.py since).
+
+## Where we were (Nov 10, 2026)
 
 - Best model: `runs/model_20261110_133518_finetune_kl05/treechop_ckpt_120000_steps.zip`
   (BC `bc_multi` + PPO fine-tuning with target_kl 0.05).
@@ -54,8 +64,10 @@ The biggest remaining failure is self-inflicted: attack is always on, so looking
 
 Every improvement to BC carries over to fine-tuning (BC 18.7 -> fine-tuned 34.3).
 
-- **Use more of the VPT data:** we use 304 of the 4,049 treechop segments. Downloading more (e.g.
-  1,000+) is cheap compared with Minecraft time.
+- ~~**Use more of the VPT data**~~ (done Nov 11, see the update above): all usable treechop
+  segments plus 8.x gave 38.3 logs per game; 7.x, 9.x and 10.x are downloading.
+- **Train longer or bigger:** train and validation loss are almost equal (3.113 vs 3.126), so
+  the model isn't memorising; try 40 epochs. A bigger network would also have to be used by PPO.
 - **Try a longer window** before log breaks (`--window 10` instead of 5) to copy more of how humans
   search for the next tree, which is exactly the weak spot.
 

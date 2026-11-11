@@ -20,6 +20,7 @@ when `--record` was used.
 |---|---|---|---|---|---|---|
 | BC `bc_multi` | **18.7** | 15.5 | 2 | 3 | 6/24 (all drowning) | `20261110_114949.json` |
 | BC `bc_all` (1,603 segments, 282k examples) | **26.5** | 22 | 4 | 0 | 4/24 | `20261111_105730.json` |
+| BC `bc_tc_8xx` (6.x treechop + 8.x, 3,719 segments, 1.13M examples) | **38.3** | 38.5 | 7 | 2 (seeds 3, 22) | **0/24** | `20261111_131528.json` |
 | `finetune_kl05` checkpoint at 120k | **34.3** | 30.5 | 3 | 2 (seeds 13, 22) | **1/24** (seed 5, not drowning) | `20261110_193136.json` + `20261110_220203.json` |
 
 The fine-tuned model beat BC on 18 of 24 worlds, lost on 4 and tied on 2: on average +15.7 logs per world
@@ -36,6 +37,14 @@ instead of 304 (5.6x the examples). Against `bc_multi` on the same worlds: +7.9 
 (standard error about 2.9), better on 16, worse on 6, tied on 2, and no 0-log games (BC: 3). Its
 validation loss was 3.142 (`bc_multi`: 3.277, but on a different held-out set). No Minecraft errors
 in this eval. Not fine-tuned yet. Videos: `20261111_105730_videos/`.
+
+`bc_tc_8xx` adds the 8.x (house building) recordings to all 1,762 treechop segments, keeping only
+log breaks with an axe in the inventory, at most 2 s of attacking, and before the player placed any
+logs (vpt_data.py's filter). Same BC settings (20 epochs, window 5 s). Against `bc_all`: +11.8 logs
+per world (standard error about 3.8), better on 15, worse on 5, tied on 4; no deaths and no
+Minecraft errors. It beats the fine-tuned `finetune_kl05` (34.3) without any PPO. Validation loss
+3.126 (held-out treechop 3.162, held-out 8.x 3.111; a new name-based split, so not comparable
+with the runs above). Videos: `20261111_131528_videos/`.
 
 Still to run: random actions on the same 24 worlds.
 

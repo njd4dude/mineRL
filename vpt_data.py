@@ -12,7 +12,7 @@ What it does:
     Each has a 640x360 20 fps .mp4 and a .jsonl with one line per game tick (keys, mouse, inventory).
     --version 7/8/9/10 reads the other datasets instead (early game, house building, diamond
     pickaxe: ~5-minute recordings of other tasks, where players also chop trees). Each version is
-    saved to its own folder (6.x: data/vpt_6xx_treechop, others: data/vpt_<N>xx).
+    saved to its own folder, data/vpt_<N>xx (for 6.x only the treechop segments are used).
   - Skips segments where the player broke fewer than --min-logs logs (some are just walking or
     sitting in menus). Log breaks come from the recording's Minecraft stats (mine_block:*_log), so
     picking up logs dropped earlier doesn't count as chopping.
@@ -26,7 +26,7 @@ What it does:
   - Drops ticks with a menu open or the player idle, and anything more than --keep seconds before
     the next log break. Each example stores how many ticks remain until that break
     (until_break), so bc_train.py --window can pick a tighter window without re-downloading.
-  - Saves one data/vpt_6xx_treechop/<segment>.npz per segment (obs uint8 [N,64,64,3], until_break,
+  - Saves one data/vpt_6xx/<segment>.npz per segment (obs uint8 [N,64,64,3], until_break,
     dyaw, dpitch, forward, jump, attack [N]) and deletes the video afterwards. Re-running skips
     segments already done.
   - python vpt_data.py --summary     shows how the data maps onto the env's actions
@@ -53,7 +53,7 @@ INDEX_URL = "https://openaipublic.blob.core.windows.net/minecraft-rl/snapshots/a
 INDEX_URLS = {6: INDEX_URL} | {
     v: f"https://openaipublic.blob.core.windows.net/minecraft-rl/snapshots/all_{v}xx_{d}.json"
     for v, d in ((7, "Apr_6"), (8, "Jun_29"), (9, "Jun_29"), (10, "Jun_29"))}
-OUT_DIR = os.path.join("data", "vpt_6xx_treechop")   # 6.x treechop; other versions: version_dir()
+OUT_DIR = os.path.join("data", "vpt_6xx")   # 6.x (treechop segments only); see version_dir()
 FRAME_SKIP = 4                 # must match TreechopEnv's frame_skip
 TICKS_PER_SEC = 20
 CAMERA_SCALER = 360.0 / 2400.0 # VPT: mouse dx/dy -> degrees (checked: equals the next tick's yaw change)
@@ -65,7 +65,7 @@ MAX_HOLD_S = 2.0               # default --max-hold: iron axe ~0.5 s per log, wo
 
 
 def version_dir(version):
-    return OUT_DIR if version == 6 else os.path.join("data", f"vpt_{version}xx")
+    return os.path.join("data", f"vpt_{version}xx")
 
 
 def has_axe(tick):
@@ -423,7 +423,7 @@ def relabel_all(workers):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--version", type=int, default=6, choices=sorted(INDEX_URLS),
-                        help="VPT dataset: 6 = treechop segments (data/vpt_6xx_treechop), 7-10 = other tasks (data/vpt_<N>xx)")
+                        help="VPT dataset version, saved to data/vpt_<N>xx (6 = its treechop segments only, 7-10 = other tasks)")
     parser.add_argument("--segments", type=int, default=300, help="segments to convert (that pass the filter)")
     parser.add_argument("--all", action="store_true", help="go through every recording in the index (ignores --segments)")
     parser.add_argument("--min-logs", type=int, default=5, help="skip segments where fewer good log breaks happened")

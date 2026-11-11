@@ -194,7 +194,7 @@ def review(relpath, base, args, stored=None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("segments", nargs="*", help="segment names (e.g. treechop-05e006bbcdec-20210904-183454)")
-    parser.add_argument("--kept", type=int, default=None, help="random segments from data/vpt_6xx_treechop/")
+    parser.add_argument("--kept", type=int, default=None, help="random segments from data/vpt_6xx/")
     parser.add_argument("--skipped", type=int, default=None, help="random segments that failed the log filter")
     parser.add_argument("--new", type=int, default=0, help="random segments vpt_data.py never processed")
     parser.add_argument("--version", type=int, default=6, choices=sorted(INDEX_URLS),

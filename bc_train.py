@@ -1,11 +1,11 @@
 """
-Behaviour cloning: teach the PPO network to copy the human actions in data/vpt_6xx_treechop/
+Behaviour cloning: teach the PPO network to copy the human actions in data/vpt_6xx/
 (built by vpt_data.py). No Minecraft needed, just the GPU.
 
   python bc_train.py                     # new run: runs/model_<date>_<time>_bc/
   python bc_train.py --epochs 30 --name bc_long
   python bc_train.py --window 3          # only copy the last 3 s before each log break
-  python bc_train.py --data data/vpt_6xx_treechop data/vpt_8xx --name bc_tc_8xx   # several VPT versions
+  python bc_train.py --data data/vpt_6xx data/vpt_8xx --name bc_tc_8xx   # several VPT versions
   tensorboard --logdir runs              # graphs per epoch (runs/<run>/tb/BC), next to the PPO runs
   python bc_train.py --tb-backfill       # add graphs for BC runs made before this was logged
   python evaluate.py --models random latest --record   # then score it, and watch the saved games
@@ -48,7 +48,8 @@ from torch.utils.tensorboard import SummaryWriter
 import train_treechop as T
 from vpt_data import labels
 
-DATA_DIR = os.path.join("data", "vpt_6xx_treechop")
+DATA_DIR = os.path.join("data", "vpt_6xx")
+OLD_DIR_NAMES = {"vpt_treechop": "vpt_6xx", "vpt_6xx_treechop": "vpt_6xx"}   # earlier names of data/vpt_6xx
 CACHE_DIR = os.path.join("data", "bc_cache")
 FRAME_BYTES = T.OBS_H * T.OBS_W * 3
 PARTS = [("move", T.MOVE_NAMES),
@@ -216,7 +217,8 @@ def log_epoch(writer, entry):
         else:
             writer.add_scalar(f"bc/{key}", v, e)
     for d, v in entry.get("val_loss_per_dir", {}).items():
-        writer.add_scalar(f"bc/val_loss_{os.path.basename(d)}", v, e)
+        name = OLD_DIR_NAMES.get(os.path.basename(d), os.path.basename(d))
+        writer.add_scalar(f"bc/val_loss_{name}", v, e)
     writer.flush()
 
 
@@ -242,7 +244,7 @@ def main():
                         help="only copy what players did in the last this-many seconds before breaking a log")
     parser.add_argument("--val-frac", type=float, default=0.1, help="fraction of segments held out")
     parser.add_argument("--data", nargs="+", default=[DATA_DIR],
-                        help="vpt_data.py output folders to train on (e.g. data/vpt_6xx_treechop data/vpt_8xx)")
+                        help="vpt_data.py output folders to train on (e.g. data/vpt_6xx data/vpt_8xx)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--name", default="bc", help="label for the run folder")
     parser.add_argument("--tb-backfill", action="store_true",
