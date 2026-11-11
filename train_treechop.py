@@ -389,7 +389,8 @@ class ValueWarmup(BaseCallback):
         return True
 
 
-def train(timesteps, n_steps, n_envs, mc_mem=None, resume=None, name=None, init=None, warmup=5):
+def train(timesteps, n_steps, n_envs, mc_mem=None, resume=None, name=None, init=None, warmup=5,
+          target_kl="default"):
     # Pick the run folder: continue an existing run, or start a new one
     if resume:
         run_dir = latest_run() if resume == "latest" else resume
@@ -402,7 +403,9 @@ def train(timesteps, n_steps, n_envs, mc_mem=None, resume=None, name=None, init=
         if init and (not init_path or not os.path.exists(init_path)):
             print(f"No model found for --init {init}")
             return
-        settings = FINETUNE if init else SCRATCH
+        settings = dict(FINETUNE if init else SCRATCH)
+        if target_kl != "default":
+            settings["target_kl"] = target_kl
         run_dir, path = new_run_dir(name), None
         with open(os.path.join(run_dir, "config.json"), "w") as f:
             json.dump({"env": ENV_NAME, "render_res": RENDER_RES, "hud_top_row": HUD_TOP_ROW,
@@ -486,11 +489,23 @@ if __name__ == "__main__":
                         help="start a new run from another model's weights (e.g. a bc_train.py run) and fine-tune it")
     parser.add_argument("--warmup", type=int, default=5,
                         help="with --init: PPO updates at the start that train only the value head")
+    parser.add_argument("--target-kl", default="default",
+                        help="new runs: stop each PPO update early once the policy has changed this much "
+                             f"(a number, or 'none' for no limit). Default: {FINETUNE['target_kl']} with "
+                             f"--init, {SCRATCH['target_kl']} otherwise")
     parser.add_argument("--name", default=None,
                         help="optional label added to a new run's folder name, e.g. --name smallturns")
     args = parser.parse_args()
 
     if args.init and args.resume:
         parser.error("use --init to start a fine-tuning run, or --resume to continue one, not both")
+    if args.target_kl == "default":
+        target_kl = "default"
+    elif args.target_kl.lower() == "none":
+        target_kl = None
+    else:
+        target_kl = float(args.target_kl)
+    if args.resume and target_kl != "default":
+        parser.error("--target-kl only applies to new runs (a resumed run keeps its own settings)")
     train(args.timesteps, args.n_steps, args.envs, args.mc_mem, args.resume, args.name,
-          args.init, args.warmup)
+          args.init, args.warmup, target_kl)
