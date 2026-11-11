@@ -2,11 +2,11 @@
 Behaviour cloning: teach the PPO network to copy the human actions in data/vpt_6xx/
 (built by vpt_data.py). No Minecraft needed, just the GPU.
 
-  python bc_train.py                     # new run: runs/model_<date>_<time>_bc/
+  python bc_train.py                     # new run: runs/bc/model_<date>_<time>_bc/
   python bc_train.py --epochs 30 --name bc_long
   python bc_train.py --window 3          # only copy the last 3 s before each log break
-  python bc_train.py --data data/vpt_6xx data/vpt_8xx --name bc_tc_8xx   # several VPT versions
-  tensorboard --logdir runs              # graphs per epoch (runs/<run>/tb/BC), next to the PPO runs
+  python bc_train.py --data data/vpt_6xx data/vpt_8xx --name bc_6xx_8xx   # several VPT versions
+  tensorboard --logdir runs              # graphs per epoch (runs/bc/<run>/tb/BC), next to the PPO runs
   python bc_train.py --tb-backfill       # add graphs for BC runs made before this was logged
   python evaluate.py --models random latest --record   # then score it, and watch the saved games
 
@@ -224,7 +224,9 @@ def log_epoch(writer, entry):
 
 def tb_backfill():
     """Write TensorBoard graphs from bc_history.json for BC runs that don't have them yet."""
-    for hist in sorted(glob.glob(os.path.join(T.RUNS_DIR, "*", "bc_history.json"))):
+    for hist in sorted(os.path.join(d, "bc_history.json") for d in T.all_runs()):
+        if not os.path.exists(hist):
+            continue
         tb = os.path.join(os.path.dirname(hist), "tb", "BC")
         if os.path.isdir(tb) and os.listdir(tb):
             continue
@@ -246,7 +248,7 @@ def main():
     parser.add_argument("--data", nargs="+", default=[DATA_DIR],
                         help="vpt_data.py output folders to train on (e.g. data/vpt_6xx data/vpt_8xx)")
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--name", default="bc", help="label for the run folder")
+    parser.add_argument("--name", default="bc", help='label for the run folder, e.g. "bc_6xx-1762_8xx-1957" (data used)')
     parser.add_argument("--tb-backfill", action="store_true",
                         help="just write TensorBoard graphs for existing BC runs (from their bc_history.json)")
     args = parser.parse_args()
@@ -265,7 +267,7 @@ def main():
     for k, d in enumerate(args.data):
         print(f"  {d}: {int(((src == k) & ~val).sum())} train / {int(((src == k) & val).sum())} validation examples")
 
-    run_dir = T.new_run_dir(args.name)
+    run_dir = T.new_run_dir(args.name, "bc")
     model = T.new_model(SpacesOnlyEnv(), tb_dir=os.path.join(run_dir, "tb"))
     policy = model.policy
     opt = torch.optim.Adam(policy.parameters(), lr=args.lr)

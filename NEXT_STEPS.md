@@ -5,18 +5,18 @@ Roughly in the order I'd try them.
 
 ## Update (Nov 11, 2026): more VPT data
 
-- BC on all 1,603 treechop segments (`bc_all`): **26.5** logs per game (BC on 304 segments: 18.7).
-- BC on treechop + 8.x (`bc_tc_8xx`, 1.13M examples): **38.3**, no deaths, better than the
-  fine-tuned `finetune_kl05` (34.3) with no PPO at all. So more data is the biggest win so far.
+- BC on all 1,603 treechop segments (`bc_6xx-1603`): **26.5** logs per game (BC on 304 segments: 18.7).
+- BC on treechop + 8.x (`bc_6xx-1762_8xx-1957`, 1.13M examples): **38.3**, no deaths, better than the
+  fine-tuned `ppo_bc_6xx-304_kl05` (34.3) with no PPO at all. So more data is the biggest win so far.
 - Downloading 7.x, 10.x and 9.x as well (`logs/download_all.sh`, resumable), into data/vpt_<N>xx.
-- Next: fine-tune `bc_tc_8xx` with PPO (same settings as `finetune_kl05`); BC on all versions once
+- Next: fine-tune `bc_6xx-1762_8xx-1957` with PPO (same settings as `ppo_bc_6xx-304_kl05`); BC on all versions once
   the downloads finish; re-run the downloader once more to retry the ~1% that failed on a
   cut-off or non-UTF-8 action log (fixed in vpt_data.py since).
 
 ## Where we were (Nov 10, 2026)
 
-- Best model: `runs/model_20261110_133518_finetune_kl05/treechop_ckpt_120000_steps.zip`
-  (BC `bc_multi` + PPO fine-tuning with target_kl 0.05).
+- Best model: `runs/ppo/model_20261110_133518_ppo_bc_6xx-304_kl05/treechop_ckpt_120000_steps.zip`
+  (BC `bc_6xx-304` + PPO fine-tuning with target_kl 0.05).
 - On 24 worlds: **34.3 logs per game** (BC: 18.7), 1 death (BC: 6, all drowning), better than BC on
   18 of 24 worlds.
 - PPO has plateaued: from 120k to 163k steps the training reward stayed at about 38 and the eval

@@ -2,7 +2,7 @@
 Compare models fairly: play each one on the SAME set of Minecraft worlds (fixed seeds), plus a
 random-action baseline, and print logs collected per world.
 
-  python evaluate.py --models random runs/model_A runs/model_B/treechop_ckpt_30000_steps.zip
+  python evaluate.py --models random runs/bc/model_A runs/ppo/model_B/treechop_ckpt_30000_steps.zip
   python evaluate.py --models random latest --seeds 1 2 3 4 5 6 7 8 --steps 2000
   python evaluate.py --models random latest --workers 4      # faster if nothing else is running
   python evaluate.py --models latest --record                # also save every game as an .mp4
@@ -10,9 +10,11 @@ random-action baseline, and print logs collected per world.
   python evaluate.py --models random --seeds 7 --workers 1 --record   # one game, e.g. to debug the env
 
 Each model can be "random", "latest", a run folder (its newest model) or a .zip checkpoint.
-Results are also saved to runs/evals/<date>_<time>.json. With --record, every game is also saved to
-runs/evals/<date>_<time>_videos/<policy>_seed<N>.mp4, with the step, logs so far, the chosen action
-and how the game ended. --video picks the layout:
+Results are saved in each model's own run folder: runs/<kind>/<run>/evals/<date>_<time>/results.json
+(that run's models only, plus which other models were scored on the same worlds), and for random
+actions in runs/random/evals/<date>_<time>/. With --record, every game is also saved there as
+<checkpoint>_seed<N>.mp4 (e.g. final_seed3.mp4), with the step, logs so far, the chosen action and
+how the game ended. --video picks the layout:
   both  (default) the full game frame and, beside it, the 64x64 image the agent actually sees
   game  only the full game frame, as a player would see it
   agent only the agent's 64x64 view, enlarged 8x (what the network gets: no HUD, squashed)
@@ -160,6 +162,15 @@ def _run_job(job):
     return label, seed, info["logs"], time.time() - start, step if info.get("died") else None
 
 
+RANDOM_DIR = os.path.join(T.RUNS_DIR, "random")   # random actions have no run folder; their evals go here
+
+
+def eval_dir_for(path, stamp):
+    """Where one eval's results and videos go for this model: <its run folder>/evals/<stamp>/."""
+    run_dir = os.path.dirname(path) if path else RANDOM_DIR
+    return os.path.join(run_dir, "evals", stamp)
+
+
 def label_for(arg, path):
     if path is None:
         return "random"
@@ -178,7 +189,7 @@ def main():
                         help="Minecraft instances in parallel (about 3.5 GB RAM each)")
     parser.add_argument("--mc-mem", default="2G")
     parser.add_argument("--record", action="store_true",
-                        help="save every game as an .mp4 in runs/evals/<date>_<time>_videos/")
+                        help="save every game as an .mp4 in each run's evals/<date>_<time>/")
     parser.add_argument("--video", choices=VIDEO_LAYOUTS, default="both",
                         help="with --record: both = game + agent's view side by side, game = only the game, "
                              "agent = only what the agent sees")
@@ -209,12 +220,13 @@ def main():
         return
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    video_dir = os.path.join(T.RUNS_DIR, "evals", stamp + "_videos") if args.record else None
-    if video_dir:
-        os.makedirs(video_dir, exist_ok=True)
+    out_dirs = {label: eval_dir_for(path, stamp) for label, path in policies}
+    for d in set(out_dirs.values()):
+        os.makedirs(d, exist_ok=True)
 
     def video_for(label, seed):
-        return os.path.join(video_dir, f"{label.replace('/', '_')}_seed{seed}.mp4") if video_dir else None
+        # inside the run's own folder, so the run name isn't repeated: final_seed3.mp4, random_seed3.mp4
+        return os.path.join(out_dirs[label], f"{label.split('/')[-1]}_seed{seed}.mp4") if args.record else None
 
     jobs = [(label, path, seed, args.steps, video_for(label, seed), args.video)
             for label, path in policies for seed in args.seeds]
@@ -242,14 +254,16 @@ def main():
         print(f"{label:55s} " + " ".join(f"{v:<5d}" for v in vals) +
               f"  {np.mean(vals):5.1f}  {np.std(vals):4.1f}  {len(deaths[label])}/{len(vals)}")
 
-    os.makedirs(os.path.join(T.RUNS_DIR, "evals"), exist_ok=True)
-    out = os.path.join(T.RUNS_DIR, "evals", stamp + ".json")
-    with open(out, "w") as f:
-        json.dump({"seeds": args.seeds, "steps": args.steps, "results": results,
-                   "died_at_step": deaths}, f, indent=2)
-    print(f"\nSaved to {out}")
-    if video_dir:
-        print(f"Videos in {video_dir}/")
+    # One results.json per run folder, holding that run's models (a run can have several checkpoints)
+    print()
+    for d in sorted(set(out_dirs.values())):
+        mine = [label for label, _ in policies if out_dirs[label] == d]
+        with open(os.path.join(d, "results.json"), "w") as f:
+            json.dump({"seeds": args.seeds, "steps": args.steps,
+                       "results": {l: results[l] for l in mine},
+                       "died_at_step": {l: deaths[l] for l in mine},
+                       "evaluated_with": [l for l, _ in policies if l not in mine]}, f, indent=2)
+        print(f"Saved to {d}/" + (" (results.json + videos)" if args.record else " (results.json)"))
 
 
 if __name__ == "__main__":

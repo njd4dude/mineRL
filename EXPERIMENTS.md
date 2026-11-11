@@ -1,8 +1,10 @@
 # Experiment log
 
-Results and observations from training the treechop agent. Raw evaluation results are in
-`runs/evals/<date>_<time>.json` (logs per seed per model), with videos in `<date>_<time>_videos/`
-when `--record` was used.
+Results and observations from training the treechop agent. Each evaluation is saved in the run
+folder of every model it scored, as `runs/<kind>/<run>/evals/<date>_<time>/results.json` (logs per
+seed, plus which other models were scored on the same worlds), with the game videos next to it when
+`--record` was used (`final_seed3.mp4`, ...). Random actions: `runs/random/evals/`. Below, an eval is
+referred to by its `<date>_<time>`, e.g. `evals/20261110_114949` in that model's run folder.
 
 ## Setup (current)
 
@@ -12,39 +14,55 @@ when `--record` was used.
 - Reward: +1 per log collected. The episode ends at 64 logs or on death (the axe count drops to 0).
 - Evaluation: `evaluate.py`, 1000 agent steps per world, the same seeds for every model.
 
+## Run names
+
+Run folders are `runs/<kind>/model_<date>_<time>_<name>`: `runs/bc/` for behaviour cloning
+(bc_train.py), `runs/ppo/` for PPO (train_treechop.py), `runs/test/` for any run whose name starts
+with `test`. Each run's evaluations are in its own `evals/` folder (see above); VPT reviews and
+surveys are in `runs/vpt_review/` and `runs/vpt_survey/`.
+`<name>` says what the run is:
+- `bc_<data>`: behaviour cloning on VPT data, `<version>-<segments>` per data folder, e.g.
+  `bc_6xx-1762_8xx-1957` = 1,762 segments from data/vpt_6xx (treechop) + 1,957 from data/vpt_8xx.
+- `ppo_<start>_<setting>`: PPO, starting from a BC model (`ppo_bc_6xx-304_kl05` = from
+  `bc_6xx-304`, target_kl 0.05) or from scratch (`ppo_scratch_...`).
+- `test_...`: not a real experiment.
+
+The runs were renamed on Nov 11 (old names like `bc_multi`, `bc_all`, `finetune_kl05` are mapped
+in `runs/renamed_runs.json`).
+
 ## Results
 
 ### Main baseline: 24 worlds (seeds 1-24), episodes end on death
 
 | policy | mean | median | wins (64) | 0-log games | deaths | file |
 |---|---|---|---|---|---|---|
-| BC `bc_multi` | **18.7** | 15.5 | 2 | 3 | 6/24 (all drowning) | `20261110_114949.json` |
-| BC `bc_all` (1,603 segments, 282k examples) | **26.5** | 22 | 4 | 0 | 4/24 | `20261111_105730.json` |
-| BC `bc_tc_8xx` (6.x treechop + 8.x, 3,719 segments, 1.13M examples) | **38.3** | 38.5 | 7 | 2 (seeds 3, 22) | **0/24** | `20261111_131528.json` |
-| `finetune_kl05` checkpoint at 120k | **34.3** | 30.5 | 3 | 2 (seeds 13, 22) | **1/24** (seed 5, not drowning) | `20261110_193136.json` + `20261110_220203.json` |
+| BC `bc_6xx-304` | **18.7** | 15.5 | 2 | 3 | 6/24 (all drowning) | `evals/20261110_114949` |
+| BC `bc_6xx-1603` (1,603 segments, 282k examples) | **26.5** | 22 | 4 | 0 | 4/24 | `evals/20261111_105730` |
+| BC `bc_6xx-1762_8xx-1957` (6.x treechop + 8.x, 3,719 segments, 1.13M examples) | **38.3** | 38.5 | 7 | 2 (seeds 3, 22) | **0/24** | `evals/20261111_131528` |
+| `ppo_bc_6xx-304_kl05` checkpoint at 120k | **34.3** | 30.5 | 3 | 2 (seeds 13, 22) | **1/24** (seed 5, not drowning) | `evals/20261110_193136` + `evals/20261110_220203` |
 
 The fine-tuned model beat BC on 18 of 24 worlds, lost on 4 and tied on 2: on average +15.7 logs per world
 (standard error about 3). Minecraft failed partway through 4 of its games: seeds 18, 19 and 20 were
-replayed (`20261110_220203.json`, 16 -> 26, 9 -> 26, 5 -> 51), and seed 15 failed at step 999 of 1000, so
+replayed (`evals/20261110_220203`, 16 -> 26, 9 -> 26, 5 -> 51), and seed 15 failed at step 999 of 1000, so
 it was kept.
 
-Videos: `20261110_193136_videos/` has all 24 seeds, but its seed 18, 19 and 20 videos are from the
-games where Minecraft failed; watch the replays in `20261110_220203_videos/` for those three.
-The BC videos for the same worlds are in `20261110_114949_videos/`.
+Videos: `evals/20261110_193136/` has all 24 seeds, but its seed 18, 19 and 20 videos are from the
+games where Minecraft failed; watch the replays in `evals/20261110_220203/` for those three.
+The BC videos for the same worlds are in `evals/20261110_114949/`.
 
-`bc_all` is the same BC recipe as `bc_multi` (20 epochs, window 5 s) on all 1,603 downloaded segments
-instead of 304 (5.6x the examples). Against `bc_multi` on the same worlds: +7.9 logs per world
+`bc_6xx-1603` is the same BC recipe as `bc_6xx-304` (20 epochs, window 5 s) on all 1,603 downloaded segments
+instead of 304 (5.6x the examples). Against `bc_6xx-304` on the same worlds: +7.9 logs per world
 (standard error about 2.9), better on 16, worse on 6, tied on 2, and no 0-log games (BC: 3). Its
-validation loss was 3.142 (`bc_multi`: 3.277, but on a different held-out set). No Minecraft errors
-in this eval. Not fine-tuned yet. Videos: `20261111_105730_videos/`.
+validation loss was 3.142 (`bc_6xx-304`: 3.277, but on a different held-out set). No Minecraft errors
+in this eval. Not fine-tuned yet. Videos: `evals/20261111_105730/`.
 
-`bc_tc_8xx` adds the 8.x (house building) recordings to all 1,762 treechop segments, keeping only
+`bc_6xx-1762_8xx-1957` adds the 8.x (house building) recordings to all 1,762 treechop segments, keeping only
 log breaks with an axe in the inventory, at most 2 s of attacking, and before the player placed any
-logs (vpt_data.py's filter). Same BC settings (20 epochs, window 5 s). Against `bc_all`: +11.8 logs
+logs (vpt_data.py's filter). Same BC settings (20 epochs, window 5 s). Against `bc_6xx-1603`: +11.8 logs
 per world (standard error about 3.8), better on 15, worse on 5, tied on 4; no deaths and no
-Minecraft errors. It beats the fine-tuned `finetune_kl05` (34.3) without any PPO. Validation loss
+Minecraft errors. It beats the fine-tuned `ppo_bc_6xx-304_kl05` (34.3) without any PPO. Validation loss
 3.126 (held-out treechop 3.162, held-out 8.x 3.111; a new name-based split, so not comparable
-with the runs above). Videos: `20261111_131528_videos/`.
+with the runs above). Videos: `evals/20261111_131528/`.
 
 Still to run: random actions on the same 24 worlds.
 
@@ -53,40 +71,40 @@ Still to run: random actions on the same 24 worlds.
 | policy | mean | median | wins | file |
 |---|---|---|---|---|
 | random actions | 2.9 / 3.2 (two runs) | 2.5 | 0 | `20261109_221254`, `20261109_225115` |
-| PPO from scratch `cam5` (simple actions) | 4.6 | 4.0 | 0 | `20261109_221254` |
-| BC v1 `bc` (inventory filter) | 12.4 | 5.5 | 0 | `20261109_221254` |
-| BC v2 `bc_breaks` (mine_block stats + window before a log break) | 17.9 | 10.5 | 0 | `20261109_221942` |
-| BC v3 `bc_multi` (move/yaw/pitch actions) | 21.4, re-run 26.8 | 13 / 20 | 1 / 2 | `20261109_225115`, `20261110_100622` |
-| fine-tune `finetune`, checkpoint at 30k | 21.4 | 11.5 | 2 | `20261109_234542` |
-| fine-tune `finetune`, checkpoint at 40k | 17.6 | 14.5 | 1 | `20261109_234542` |
+| PPO from scratch `ppo_scratch_cam5` (simple actions) | 4.6 | 4.0 | 0 | `20261109_221254` |
+| BC v1 `bc_6xx-303_v1-inventory-filter` (inventory filter) | 12.4 | 5.5 | 0 | `20261109_221254` |
+| BC v2 `bc_6xx-304_v2-7actions` (mine_block stats + window before a log break) | 17.9 | 10.5 | 0 | `20261109_221942` |
+| BC v3 `bc_6xx-304` (move/yaw/pitch actions) | 21.4, re-run 26.8 | 13 / 20 | 1 / 2 | `20261109_225115`, `20261110_100622` |
+| fine-tune `ppo_bc_6xx-304_kl02_no-death-end`, checkpoint at 30k | 21.4 | 11.5 | 2 | `20261109_234542` |
+| fine-tune `ppo_bc_6xx-304_kl02_no-death-end`, checkpoint at 40k | 17.6 | 14.5 | 1 | `20261109_234542` |
 
-(The short runs in `runs/evals/`, of 50-80 steps or a single seed, were video/debug tests. A run that
+(The short evals of 50-80 steps or a single seed, in `bc_6xx-304`'s `evals/`, were video/debug tests. A run that
 showed 3,259 fake "logs" from the Minecraft-hang bug was deleted.)
 
-### Quick check: 4 worlds (seeds 1-4), episodes end on death, `20261110_162445.json`
+### Quick check: 4 worlds (seeds 1-4), episodes end on death, `evals/20261110_162445`
 
 | policy | s1 | s2 | s3 | s4 | mean | deaths |
 |---|---|---|---|---|---|---|
 | random | 0 | 2 | 11 | 7 | 5.0 | 0/4 |
-| BC `bc_multi` | 4 | 17 | 16 | 64 | 25.2 | 0/4 |
-| `finetune_kl05` checkpoint at 50k | 16 | 34 | 64 | 64 | 44.5 | 0/4 |
-| `finetune_kl05` final (~120k) | 31 | 39 | 60 | 61 | **47.8** | 0/4 |
-| `finetune_kl05` checkpoint at 120k (2nd eval, `20261110_192334`) | 38 | 47 | 64 | 64 | 53.2 | 0/4 |
-| `finetune_kl05` final (~163k, `20261110_192334`) | 26 | 40 | 64 | 64 | 48.5 | 0/4 |
+| BC `bc_6xx-304` | 4 | 17 | 16 | 64 | 25.2 | 0/4 |
+| `ppo_bc_6xx-304_kl05` checkpoint at 50k | 16 | 34 | 64 | 64 | 44.5 | 0/4 |
+| `ppo_bc_6xx-304_kl05` final (~120k) | 31 | 39 | 60 | 61 | **47.8** | 0/4 |
+| `ppo_bc_6xx-304_kl05` checkpoint at 120k (2nd eval, `20261110_192334`) | 38 | 47 | 64 | 64 | 53.2 | 0/4 |
+| `ppo_bc_6xx-304_kl05` final (~163k, `20261110_192334`) | 26 | 40 | 64 | 64 | 48.5 | 0/4 |
 
 BC on these seeds across all 4 evaluations so far: s1 9/0/1/4, s2 26/21/31/17, s3 64/64/32/16,
 s4 32/64/64/64 (about 32 on average). Both fine-tuned checkpoints beat every BC run on seeds 1 and 2,
 so this is the first real sign that fine-tuning helps. Only 4 worlds, though: confirm on 24.
 
-## PPO fine-tuning runs (from `bc_multi`)
+## PPO fine-tuning runs (from `bc_6xx-304`)
 
 All runs: lr 1e-4, ent_coef 0.001, n_steps 1024 x 4 envs = 4,096 steps per update, 10 epochs,
 batch 64, 5 value warm-up updates (only the value head trains).
 
 | run | target_kl | steps | result |
 |---|---|---|---|
-| `finetune_death` | 0.02 | ~94k (stopped) | Every update early-stopped at epoch 0 (KL ~0.04 > 0.03 limit). ep_rew_mean flat at ~21-24; explained_variance rose to ~0.6-0.75. No forgetting, but hardly any learning. |
-| `finetune_kl05` | 0.05 | ~163k (120k with 4 envs, then +40k with 3 envs) | Most updates complete several epochs. At ~100k: ep_rew_mean rose from ~20 to ~34, explained_variance ~0.6-0.8, approx_kl ~0.03-0.046, clip_fraction ~0.3-0.4 (high), entropy 4.1 -> 4.65 (max is 5.69). Needs the 24-world eval. |
+| `ppo_bc_6xx-304_kl02` | 0.02 | ~94k (stopped) | Every update early-stopped at epoch 0 (KL ~0.04 > 0.03 limit). ep_rew_mean flat at ~21-24; explained_variance rose to ~0.6-0.75. No forgetting, but hardly any learning. |
+| `ppo_bc_6xx-304_kl05` | 0.05 | ~163k (120k with 4 envs, then +40k with 3 envs) | Most updates complete several epochs. At ~100k: ep_rew_mean rose from ~20 to ~34, explained_variance ~0.6-0.8, approx_kl ~0.03-0.046, clip_fraction ~0.3-0.4 (high), entropy 4.1 -> 4.65 (max is 5.69). Needs the 24-world eval. |
 
 Note: training ep_rew_mean is **not comparable** to eval scores. Training episodes average about
 1,500 steps (eval: 1,000), use random worlds, and average over the last 100 episodes from many
@@ -142,7 +160,7 @@ policy versions.
   count instead.
 
 ## Next steps
-- Confirm `finetune_kl05` on the 24 worlds (the 4-world check: 47.8 vs BC 25.2).
+- Confirm `ppo_bc_6xx-304_kl05` on the 24 worlds (the 4-world check: 47.8 vs BC 25.2).
 - From 120k to 163k, ep_rew_mean stayed flat at ~38 and the 4-world score didn't change (120k: 53.2, 163k: 48.5):
   more PPO at these settings has stopped paying off. Next, find what still fails on 24 worlds.
 - If fine-tuning loses BC skills: add a KL penalty toward the BC policy.

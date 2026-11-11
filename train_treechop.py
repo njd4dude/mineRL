@@ -1,12 +1,12 @@
 """
 Train an agent to chop trees in MineRLTreechop-v0 using PPO (reinforcement learning).
 
-  python train_treechop.py                 # start a NEW run in runs/model_<date>_<time>/
-  python train_treechop.py --name test1    # new run with a label: runs/model_<date>_<time>_test1/
-  python train_treechop.py --resume        # continue the latest run
-  python train_treechop.py --init runs/model_20261109_224055_bc_multi --name finetune
+  python train_treechop.py --name ppo_scratch        # start a NEW run in runs/ppo/model_<date>_<time>_ppo_scratch/
+  python train_treechop.py --name test_speed         # names starting with "test" go to runs/test/ instead
+  python train_treechop.py --resume        # continue the latest PPO run
+  python train_treechop.py --init runs/bc/model_20261109_224055_bc_6xx-304 --name ppo_bc_6xx-304_kl05
                                            # fine-tune a behaviour-cloned model (bc_train.py) with PPO
-  python train_treechop.py --resume runs/model_20261109_163045   # continue a specific run
+  python train_treechop.py --resume runs/ppo/model_20261110_133518_ppo_bc_6xx-304_kl05   # continue a specific run
   python train_treechop.py --envs 3        # change how many Minecraft instances run in parallel (default 4)
   python train_treechop.py --cpu-render    # draw Minecraft on the CPU instead of the GPU
   tensorboard --logdir runs                # view and compare all runs' training graphs
@@ -51,9 +51,13 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 
 logging.basicConfig(level=logging.WARNING)
 
-# Every training run gets its own folder: runs/model_<date>_<time>[_<name>]/ holding its
-# checkpoints, final model, TensorBoard logs (tb/) and settings (config.json).
+# Every training run gets its own folder: runs/<kind>/model_<date>_<time>[_<name>]/ holding its
+# checkpoints, final model, TensorBoard logs (tb/) and settings (config.json). <kind> is "bc"
+# (bc_train.py), "ppo" (this script) or "test" (any run whose name starts with "test"). Each run's
+# evaluations go in its evals/ folder (evaluate.py); runs/random/evals/ holds the random baseline's.
 RUNS_DIR = "runs"
+RUN_KINDS = ("bc", "ppo", "test")
+RENAMED_RUNS = os.path.join(RUNS_DIR, "renamed_runs.json")   # old run names -> current ones
 FINAL_NAME = "final.zip"
 
 # Each agent decision is three choices made together (a MultiDiscrete action [move, yaw, pitch]),
@@ -260,19 +264,49 @@ class TreechopEnv(gymnasium.Env):
         self.env.close()
 
 
-def new_run_dir(name=None):
-    """Create runs/model_<date>_<time>[_<name>]/ for a new training run."""
+def new_run_dir(name=None, kind="ppo"):
+    """Create runs/<kind>/model_<date>_<time>[_<name>]/ for a new training run (kind "test" when
+    the name starts with "test")."""
+    if name and name.startswith("test"):
+        kind = "test"
+    assert kind in RUN_KINDS, kind
     folder = "model_" + datetime.now().strftime("%Y%m%d_%H%M%S") + (f"_{name}" if name else "")
-    path = os.path.join(RUNS_DIR, folder)
+    path = os.path.join(RUNS_DIR, kind, folder)
     os.makedirs(path)
     return path
 
 
-def latest_run():
-    """The most recently used run folder, or None. Only training runs (runs/model_*) count, not
-    e.g. runs/evals/, which changes whenever an evaluation saves its results."""
-    runs = [d for d in glob.glob(os.path.join(RUNS_DIR, "model_*")) if os.path.isdir(d)]
+def all_runs(kinds=RUN_KINDS):
+    return [d for k in kinds for d in glob.glob(os.path.join(RUNS_DIR, k, "model_*")) if os.path.isdir(d)]
+
+
+def latest_run(kinds=("bc", "ppo")):
+    """The most recently used run folder of these kinds, or None (test runs don't count)."""
+    runs = all_runs(kinds)
     return max(runs, key=os.path.getmtime) if runs else None
+
+
+def find_moved(path):
+    """Where a run path from before the runs/<kind>/ layout or the Nov 11 renames is now, e.g.
+    runs/model_20261109_224055_bc_multi/final.zip -> runs/bc/model_20261109_224055_bc_6xx-304/final.zip.
+    Returns path unchanged if it exists or can't be found."""
+    if os.path.exists(path):
+        return path
+    parts = os.path.normpath(path).split(os.sep)
+    i = next((i for i, p in enumerate(parts) if p.startswith("model_")), None)
+    if i is None:
+        return path
+    run, rest = parts[i], parts[i + 1:]
+    if os.path.exists(RENAMED_RUNS):
+        with open(RENAMED_RUNS) as f:
+            run = os.path.basename(json.load(f).get(run, run))   # values are runs/<kind>/<name>
+    for d in all_runs():
+        if os.path.basename(d) == run:
+            new = os.path.join(d, *rest)
+            if os.path.exists(new):
+                print(f"(note: {path} is now {new})")
+                return new
+    return path
 
 
 def latest_model(run_dir=None):
@@ -289,6 +323,7 @@ def resolve_model(arg=None):
     a run folder = newest model in that folder, a .zip = that file."""
     if arg in (None, "latest"):
         return latest_model()
+    arg = find_moved(arg)
     if os.path.isdir(arg):
         return latest_model(arg)
     return arg
@@ -393,7 +428,7 @@ def train(timesteps, n_steps, n_envs, mc_mem=None, resume=None, name=None, init=
           target_kl="default"):
     # Pick the run folder: continue an existing run, or start a new one
     if resume:
-        run_dir = latest_run() if resume == "latest" else resume
+        run_dir = latest_run(("ppo",)) if resume == "latest" else find_moved(resume)
         path = latest_model(run_dir) if run_dir else None
         if not path:
             print(f"Nothing to resume: no saved model found in {run_dir or RUNS_DIR + '/'}")
@@ -406,7 +441,7 @@ def train(timesteps, n_steps, n_envs, mc_mem=None, resume=None, name=None, init=
         settings = dict(FINETUNE if init else SCRATCH)
         if target_kl != "default":
             settings["target_kl"] = target_kl
-        run_dir, path = new_run_dir(name), None
+        run_dir, path = new_run_dir(name, "ppo"), None
         with open(os.path.join(run_dir, "config.json"), "w") as f:
             json.dump({"env": ENV_NAME, "render_res": RENDER_RES, "hud_top_row": HUD_TOP_ROW,
                        "obs_size": [OBS_W, OBS_H], "frame_skip": 4, "moves": MOVES,
