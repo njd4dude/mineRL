@@ -20,6 +20,13 @@ when `--record` was used.
 |---|---|---|---|---|---|---|
 | BC `bc_multi` | **18.7** | 15.5 | 2 | 3 | 6/24 (all drowning) | `20261110_114949.json` |
 
+| `finetune_kl05` checkpoint at 120k | **34.3** | 30.5 | 3 | 2 (seeds 13, 22) | **1/24** (seed 5, not drowning) | `20261110_193136.json` + `20261110_220203.json` |
+
+The fine-tuned model beat BC on 18 of 24 worlds, lost on 4 and tied on 2: on average +15.7 logs per world
+(standard error about 3). Minecraft failed partway through 4 of its games: seeds 18, 19 and 20 were
+replayed (`20261110_220203.json`, 16 -> 26, 9 -> 26, 5 -> 51), and seed 15 failed at step 999 of 1000, so
+it was kept.
+
 Still to run: random actions on the same 24 worlds.
 
 ### Earlier: 8 worlds (seeds 1-8), before episodes ended on death
@@ -45,6 +52,8 @@ showed 3,259 fake "logs" from the Minecraft-hang bug was deleted.)
 | BC `bc_multi` | 4 | 17 | 16 | 64 | 25.2 | 0/4 |
 | `finetune_kl05` checkpoint at 50k | 16 | 34 | 64 | 64 | 44.5 | 0/4 |
 | `finetune_kl05` final (~120k) | 31 | 39 | 60 | 61 | **47.8** | 0/4 |
+| `finetune_kl05` checkpoint at 120k (2nd eval, `20261110_192334`) | 38 | 47 | 64 | 64 | 53.2 | 0/4 |
+| `finetune_kl05` final (~163k, `20261110_192334`) | 26 | 40 | 64 | 64 | 48.5 | 0/4 |
 
 BC on these seeds across all 4 evaluations so far: s1 9/0/1/4, s2 26/21/31/17, s3 64/64/32/16,
 s4 32/64/64/64 (about 32 on average). Both fine-tuned checkpoints beat every BC run on seeds 1 and 2,
@@ -58,7 +67,7 @@ batch 64, 5 value warm-up updates (only the value head trains).
 | run | target_kl | steps | result |
 |---|---|---|---|
 | `finetune_death` | 0.02 | ~94k (stopped) | Every update early-stopped at epoch 0 (KL ~0.04 > 0.03 limit). ep_rew_mean flat at ~21-24; explained_variance rose to ~0.6-0.75. No forgetting, but hardly any learning. |
-| `finetune_kl05` | 0.05 | ~120k (paused, can `--resume`) | Most updates complete several epochs. At ~100k: ep_rew_mean rose from ~20 to ~34, explained_variance ~0.6-0.8, approx_kl ~0.03-0.046, clip_fraction ~0.3-0.4 (high), entropy 4.1 -> 4.65 (max is 5.69). Needs the 24-world eval. |
+| `finetune_kl05` | 0.05 | ~163k (120k with 4 envs, then +40k with 3 envs) | Most updates complete several epochs. At ~100k: ep_rew_mean rose from ~20 to ~34, explained_variance ~0.6-0.8, approx_kl ~0.03-0.046, clip_fraction ~0.3-0.4 (high), entropy 4.1 -> 4.65 (max is 5.69). Needs the 24-world eval. |
 
 Note: training ep_rew_mean is **not comparable** to eval scores. Training episodes average about
 1,500 steps (eval: 1,000), use random worlds, and average over the last 100 episodes from many
@@ -78,6 +87,15 @@ policy versions.
   chopping and holding forward.
 - **Staring at the sky** inside tree leaves.
 - Does best in dense forests, worst in plains or near water (0-log games).
+
+### Fine-tuned (120k) failure modes, from the 24-world videos
+- **Drowning is gone**: 0 drownings in 24 games (BC: 6).
+- **Digging into the ground** (seed 22, 0 logs): attack is always held, so looking down digs. It dug
+  itself into a dark pit (19 dirt in the inventory) and stayed there from about step 300 to the end.
+- **Caves / darkness** (seed 5, the only death): with 8 logs it wandered into a dark stone area,
+  lost health and died at step 783 (looks like a mob; the death message is too small to read).
+- **Bad terrain** (seed 13, 0 logs): spawned by water among hills, saw birch trees but never got to a
+  trunk, spent the time jumping around and looking at leaves or the sky.
 
 ### Evaluation noise
 - The same model on the same world is not repeatable: BC on seed 3 scored 64, 64, 16 and 14
@@ -106,6 +124,7 @@ policy versions.
 
 ## Next steps
 - Confirm `finetune_kl05` on the 24 worlds (the 4-world check: 47.8 vs BC 25.2).
-- Resume `finetune_kl05` toward 200k; ep_rew_mean was flat at ~34 from ~98k-120k.
+- From 120k to 163k, ep_rew_mean stayed flat at ~38 and the 4-world score didn't change (120k: 53.2, 163k: 48.5):
+  more PPO at these settings has stopped paying off. Next, find what still fails on 24 worlds.
 - If fine-tuning loses BC skills: add a KL penalty toward the BC policy.
 - If the reward collapses: lower target_kl or the learning rate (clip_fraction is already high).
