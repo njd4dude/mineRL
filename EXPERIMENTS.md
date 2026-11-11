@@ -39,6 +39,8 @@ in `runs/renamed_runs.json`).
 | BC `bc_6xx-304` | **18.7** | 15.5 | 2 | 3 | 6/24 (all drowning) | `evals/20261110_114949` |
 | BC `bc_6xx-1603` (1,603 segments, 282k examples) | **26.5** | 22 | 4 | 0 | 4/24 | `evals/20261111_105730` |
 | BC `bc_6xx-1762_8xx-1957` (6.x treechop + 8.x, 3,719 segments, 1.13M examples) | **38.3** | 38.5 | 7 | 2 (seeds 3, 22) | **0/24** | `evals/20261111_131528` |
+| BC `bc_6xx-1762_8xx-1957_plus20` (the above + 20 more epochs, lr 1e-4) | **42.8** | 44.5 | 4 | **0** | 3/24 (seeds 5, 9, 18, late in the game) | `evals/20261111_142003` |
+| BC `bc_6xx-1762_8xx-1957_plus40` (20 more again: 60 epochs in all) | 37.5 | 36 | 7 | 1 (seed 16) | 1/24 (seed 24) | `evals/20261111_145652` |
 | `ppo_bc_6xx-304_kl05` checkpoint at 120k | **34.3** | 30.5 | 3 | 2 (seeds 13, 22) | **1/24** (seed 5, not drowning) | `evals/20261110_193136` + `evals/20261110_220203` |
 
 The fine-tuned model beat BC on 18 of 24 worlds, lost on 4 and tied on 2: on average +15.7 logs per world
@@ -63,6 +65,19 @@ per world (standard error about 3.8), better on 15, worse on 5, tied on 4; no de
 Minecraft errors. It beats the fine-tuned `ppo_bc_6xx-304_kl05` (34.3) without any PPO. Validation loss
 3.126 (held-out treechop 3.162, held-out 8.x 3.111; a new name-based split, so not comparable
 with the runs above). Videos: `evals/20261111_131528/`.
+
+`bc_6xx-1762_8xx-1957_plus20` continues that model for 20 more epochs (`bc_train.py --init`, lr 1e-4
+falling to 0, epochs 21-40). Validation loss 3.126 -> 3.116 (treechop 3.162 -> 3.145), flat from
+about epoch 34, while the training loss kept falling (3.113 -> 3.088): the gap between them doubled,
+so more epochs would mostly memorise. Game score 38.3 -> 42.8: better on 14 worlds, worse on 7, tied
+on 3, +4.5 per world with a standard error of about 3.8, so it may be noise. No 0-log games (before:
+2), but 3 deaths (before: 0), all after step 800.
+
+`bc_6xx-1762_8xx-1957_plus40` continues `_plus20` for 20 more (epochs 41-60, same lr 1e-4 -> 0).
+Validation loss 3.116 -> 3.111 (treechop 3.145 -> 3.137), the train/validation gap grew to 0.039.
+Game score 37.5: against `_plus20` -5.3 per world (standard error about 4.0, better on 8, worse on
+14), against 20 epochs -0.8 (about 5.2). So 20, 40 and 60 epochs score the same within the noise
+(38.3 / 42.8 / 37.5): after 20 epochs the small validation gains no longer show up in the game.
 
 Still to run: random actions on the same 24 worlds.
 

@@ -8,6 +8,8 @@ Behaviour cloning: teach the PPO network to copy the human actions in data/vpt_6
   python bc_train.py --data data/vpt_6xx data/vpt_8xx --name bc_6xx_8xx   # several VPT versions
   tensorboard --logdir runs              # graphs per epoch (runs/bc/<run>/tb/BC), next to the PPO runs
   python bc_train.py --tb-backfill       # add graphs for BC runs made before this was logged
+  python bc_train.py --init runs/bc/<run> --data <same folders> --lr 1e-4 --name <name>_plus20
+                                         # keep training a BC model for --epochs more, in a new run folder
   python evaluate.py --models random latest --record   # then score it, and watch the saved games
 
 The result is a normal PPO model (same network and [move, yaw, pitch] actions as
@@ -249,6 +251,9 @@ def main():
                         help="vpt_data.py output folders to train on (e.g. data/vpt_6xx data/vpt_8xx)")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--name", default="bc", help='label for the run folder, e.g. "bc_6xx-1762_8xx-1957" (data used)')
+    parser.add_argument("--init", default=None,
+                        help="continue training this BC model (run folder or .zip) instead of a new network; "
+                             "saved to a new run folder, the original is not changed")
     parser.add_argument("--tb-backfill", action="store_true",
                         help="just write TensorBoard graphs for existing BC runs (from their bc_history.json)")
     args = parser.parse_args()
@@ -267,8 +272,27 @@ def main():
     for k, d in enumerate(args.data):
         print(f"  {d}: {int(((src == k) & ~val).sum())} train / {int(((src == k) & val).sum())} validation examples")
 
+    first_epoch = 1
+    if args.init:
+        from stable_baselines3 import PPO
+        init_path = T.resolve_model(args.init)
+        if not init_path or not os.path.exists(init_path):
+            raise SystemExit(f"No model found for --init {args.init}")
+        start = PPO.load(init_path, device=device)
+        problem = T.model_mismatch(start)
+        if problem:
+            raise SystemExit(problem)
+        hist = os.path.join(os.path.dirname(init_path), "bc_history.json")
+        if os.path.exists(hist):   # number epochs on from where that run stopped (it may itself be a continuation)
+            with open(hist) as f:
+                first_epoch = json.load(f)[-1]["epoch"] + 1
+        args.init = init_path
+
     run_dir = T.new_run_dir(args.name, "bc")
     model = T.new_model(SpacesOnlyEnv(), tb_dir=os.path.join(run_dir, "tb"))
+    if args.init:
+        model.policy.load_state_dict(start.policy.state_dict())
+        del start
     policy = model.policy
     opt = torch.optim.Adam(policy.parameters(), lr=args.lr)
     steps_per_epoch = len(tr_idx) // args.batch
@@ -287,7 +311,12 @@ def main():
     best = float("inf")
     history = []
     writer = SummaryWriter(os.path.join(run_dir, "tb", "BC"))
-    for epoch in range(1, args.epochs + 1):
+    if args.init:
+        # the starting model is the one to beat (and is kept if no epoch improves on it)
+        best = evaluate(policy, obs, actions, va_idx, device)[0]
+        model.save(os.path.join(run_dir, T.FINAL_NAME))
+        print(f"Starting from {args.init}: val loss {best:.3f} (epochs continue from {first_epoch})")
+    for epoch in range(first_epoch, first_epoch + args.epochs):
         policy.set_training_mode(True)
         total = 0.0
         for o_np, a_np in batches(obs, actions, tr_idx, args.batch, shuffle=True):
