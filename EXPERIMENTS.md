@@ -19,6 +19,7 @@ when `--record` was used.
 | policy | mean | median | wins (64) | 0-log games | deaths | file |
 |---|---|---|---|---|---|---|
 | BC `bc_multi` | **18.7** | 15.5 | 2 | 3 | 6/24 (all drowning) | `20261110_114949.json` |
+| BC `bc_all` (1,603 segments, 282k examples) | **26.5** | 22 | 4 | 0 | 4/24 | `20261111_105730.json` |
 | `finetune_kl05` checkpoint at 120k | **34.3** | 30.5 | 3 | 2 (seeds 13, 22) | **1/24** (seed 5, not drowning) | `20261110_193136.json` + `20261110_220203.json` |
 
 The fine-tuned model beat BC on 18 of 24 worlds, lost on 4 and tied on 2: on average +15.7 logs per world
@@ -29,6 +30,12 @@ it was kept.
 Videos: `20261110_193136_videos/` has all 24 seeds, but its seed 18, 19 and 20 videos are from the
 games where Minecraft failed; watch the replays in `20261110_220203_videos/` for those three.
 The BC videos for the same worlds are in `20261110_114949_videos/`.
+
+`bc_all` is the same BC recipe as `bc_multi` (20 epochs, window 5 s) on all 1,603 downloaded segments
+instead of 304 (5.6x the examples). Against `bc_multi` on the same worlds: +7.9 logs per world
+(standard error about 2.9), better on 16, worse on 6, tied on 2, and no 0-log games (BC: 3). Its
+validation loss was 3.142 (`bc_multi`: 3.277, but on a different held-out set). No Minecraft errors
+in this eval. Not fine-tuned yet. Videos: `20261111_105730_videos/`.
 
 Still to run: random actions on the same 24 worlds.
 
