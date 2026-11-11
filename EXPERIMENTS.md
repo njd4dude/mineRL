@@ -19,13 +19,16 @@ when `--record` was used.
 | policy | mean | median | wins (64) | 0-log games | deaths | file |
 |---|---|---|---|---|---|---|
 | BC `bc_multi` | **18.7** | 15.5 | 2 | 3 | 6/24 (all drowning) | `20261110_114949.json` |
-
 | `finetune_kl05` checkpoint at 120k | **34.3** | 30.5 | 3 | 2 (seeds 13, 22) | **1/24** (seed 5, not drowning) | `20261110_193136.json` + `20261110_220203.json` |
 
 The fine-tuned model beat BC on 18 of 24 worlds, lost on 4 and tied on 2: on average +15.7 logs per world
 (standard error about 3). Minecraft failed partway through 4 of its games: seeds 18, 19 and 20 were
 replayed (`20261110_220203.json`, 16 -> 26, 9 -> 26, 5 -> 51), and seed 15 failed at step 999 of 1000, so
 it was kept.
+
+Videos: `20261110_193136_videos/` has all 24 seeds, but its seed 18, 19 and 20 videos are from the
+games where Minecraft failed; watch the replays in `20261110_220203_videos/` for those three.
+The BC videos for the same worlds are in `20261110_114949_videos/`.
 
 Still to run: random actions on the same 24 worlds.
 
