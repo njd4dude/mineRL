@@ -5,13 +5,20 @@ Minecraft 1.16, the same version we train on).
   python vpt_data.py                       # download + convert 300 treechop segments
   python vpt_data.py --segments 50         # quicker test
   python vpt_data.py --preview             # also save a contact sheet of frames + labels per segment
+  python vpt_data.py --version 8 --all     # every 8.x (house building) recording that passes the filter
 
 What it does:
   - The VPT 6.x index has ~4,000 one-minute "treechop-*" segments: contractors asked to chop trees.
     Each has a 640x360 20 fps .mp4 and a .jsonl with one line per game tick (keys, mouse, inventory).
+    --version 7/8/9/10 reads the other datasets instead (early game, house building, diamond
+    pickaxe: ~5-minute recordings of other tasks, where players also chop trees). Each version is
+    saved to its own folder (6.x: data/vpt_6xx_treechop, others: data/vpt_<N>xx).
   - Skips segments where the player broke fewer than --min-logs logs (some are just walking or
     sitting in menus). Log breaks come from the recording's Minecraft stats (mine_block:*_log), so
     picking up logs dropped earlier doesn't count as chopping.
+  - Only learns from log breaks that look like our agent's chopping (see classify_chunks): an axe
+    in the inventory, the log broken within --max-hold seconds of attacking (not by hand), and
+    no logs placed earlier in the recording (later "trees" may be the player's own house).
   - Turns every 4 ticks (our frame_skip) into one training example: the frame at the start of the
     4 ticks, processed exactly like the env does (process_pov), plus what the human did in those
     ticks (camera turn in degrees, W / space / attack held). bc_train.py maps that to the env's
@@ -19,7 +26,7 @@ What it does:
   - Drops ticks with a menu open or the player idle, and anything more than --keep seconds before
     the next log break. Each example stores how many ticks remain until that break
     (until_break), so bc_train.py --window can pick a tighter window without re-downloading.
-  - Saves one data/vpt_treechop/<segment>.npz per segment (obs uint8 [N,64,64,3], until_break,
+  - Saves one data/vpt_6xx_treechop/<segment>.npz per segment (obs uint8 [N,64,64,3], until_break,
     dyaw, dpitch, forward, jump, attack [N]) and deletes the video afterwards. Re-running skips
     segments already done.
   - python vpt_data.py --summary     shows how the data maps onto the env's actions
@@ -28,6 +35,7 @@ import argparse
 import json
 import os
 import random
+import shutil
 import tempfile
 import urllib.error
 import urllib.request
@@ -40,13 +48,50 @@ from train_treechop import (LOG_ITEMS, MOVE_NAMES, OBS_H, OBS_W, PITCH_STEPS, RE
                             describe_action, human_to_action, nearest_step, process_pov)
 
 INDEX_URL = "https://openaipublic.blob.core.windows.net/minecraft-rl/snapshots/all_6xx_Jun_29.json"
-OUT_DIR = os.path.join("data", "vpt_treechop")
+# One index per VPT dataset version. Only 6.x has "treechop-*" segments; the others are other
+# tasks, but players chop trees in them too (the log filter works the same on any recording).
+INDEX_URLS = {6: INDEX_URL} | {
+    v: f"https://openaipublic.blob.core.windows.net/minecraft-rl/snapshots/all_{v}xx_{d}.json"
+    for v, d in ((7, "Apr_6"), (8, "Jun_29"), (9, "Jun_29"), (10, "Jun_29"))}
+OUT_DIR = os.path.join("data", "vpt_6xx_treechop")   # 6.x treechop; other versions: version_dir()
 FRAME_SKIP = 4                 # must match TreechopEnv's frame_skip
 TICKS_PER_SEC = 20
 CAMERA_SCALER = 360.0 / 2400.0 # VPT: mouse dx/dy -> degrees (checked: equals the next tick's yaw change)
 PREVIEW_WINDOW_S = 5           # previews show examples within this many seconds of a log break
 MINE_STATS = {f"minecraft.mine_block:minecraft.{item}" for item in LOG_ITEMS}
+PLACE_STATS = {f"minecraft.use_item:minecraft.{item}" for item in LOG_ITEMS}
 NO_BREAK = 32000               # until_break value for examples with no later log break
+MAX_HOLD_S = 2.0               # default --max-hold: iron axe ~0.5 s per log, wooden ~1.5 s, by hand ~3 s
+
+
+def version_dir(version):
+    return OUT_DIR if version == 6 else os.path.join("data", f"vpt_{version}xx")
+
+
+def has_axe(tick):
+    if "axe" in tick:          # slimmed tick (slim())
+        return tick["axe"]
+    return any(i.get("type", "").endswith("_axe") for i in tick.get("inventory", []))
+
+
+def logs_placed(tick):
+    if "placed" in tick:
+        return tick["placed"]
+    return sum(v for k, v in tick.get("stats", {}).items() if k in PLACE_STATS)
+
+
+def slim(tick):
+    """Just what the filter needs from one tick, so the 5-minute recordings' 20-60 MB logs don't
+    fill the memory when several are converted at once."""
+    stats = tick.get("stats", {})
+    return {
+        "isGuiOpen": tick["isGuiOpen"],
+        "mouse": {k: tick["mouse"][k] for k in ("dx", "dy", "buttons")},
+        "keyboard": {"keys": tick["keyboard"]["keys"]},
+        "stats": {k: v for k, v in stats.items() if k in MINE_STATS},
+        "placed": sum(v for k, v in stats.items() if k in PLACE_STATS),
+        "axe": has_axe(tick),
+    }
 # What each example stores about the human's input (bc_train.py turns these into env actions with
 # human_to_action, so the action set can change without downloading anything again)
 INPUT_FIELDS = ["dyaw", "dpitch", "forward", "jump", "attack"]
@@ -90,27 +135,74 @@ def chunk_inputs(ticks):
 
 
 def parse_ticks(jsonl_text):
-    return [json.loads(line) for line in jsonl_text.splitlines() if line.strip()]
+    """Slimmed ticks from a .jsonl. Some recordings end with a cut-off line (the recorder
+    stopped mid-write); that last line is dropped. A broken line anywhere else is an error,
+    since every later tick would no longer line up with its video frame."""
+    lines = [line for line in jsonl_text.splitlines() if line.strip()]
+    ticks = []
+    for i, line in enumerate(lines):
+        try:
+            ticks.append(slim(json.loads(line)))
+        except json.JSONDecodeError:
+            if i < len(lines) - 1:
+                raise
+    return ticks
 
 
-def select_chunks(ticks, n_frames, keep_s):
+def select_chunks(ticks, n_frames, keep_s, max_hold_s=MAX_HOLD_S, filter_breaks=True):
     """The FRAME_SKIP-tick chunks worth learning from: no menu open, player not idle, and at most
     keep_s seconds before the next log break. Returns [(start tick, ticks until break, inputs)]."""
-    return [(start, ub, inputs) for start, ub, inputs, reason in classify_chunks(ticks, n_frames, keep_s)
+    return [(start, ub, inputs) for start, ub, inputs, reason in classify_chunks(ticks, n_frames, keep_s, max_hold_s, filter_breaks)
             if reason is None]
 
 
-def classify_chunks(ticks, n_frames, keep_s):
+def break_problems(ticks, mined, max_hold_s=MAX_HOLD_S):
+    """{break tick: why it's not like our agent's chopping} for the log breaks to learn nothing
+    from: no axe in the inventory, attack held longer than max_hold_s (by hand or a slow tool:
+    the timing would be wrong for our iron axe), or after the player placed logs (it may be
+    their own building). Breaks not in the dict are fine."""
+    placed = [logs_placed(t) for t in ticks]
+    first_place = next((i for i in range(1, len(ticks)) if placed[i] > placed[i - 1]), None)
+    attacking = [0 in t["mouse"]["buttons"] for t in ticks]
+    problems, prev = {}, 0
+    for b in range(1, len(ticks)):
+        if mined[b] <= mined[b - 1]:
+            continue
+        i = b - 1      # attack held before this break, since it started or the previous break
+        while i > prev and attacking[i]:
+            i -= 1
+        hold = b - 1 - i
+        prev = b
+        if first_place is not None and b > first_place:
+            problems[b] = "break after placing logs"
+        elif not has_axe(ticks[b]):
+            problems[b] = "break without an axe"
+        elif hold > max_hold_s * TICKS_PER_SEC:
+            problems[b] = "slow break (by hand?)"
+    return problems
+
+
+def good_breaks(ticks, max_hold_s=MAX_HOLD_S):
+    """How many log breaks pass break_problems (the --min-logs check)."""
+    _, mined = logs_mined(ticks)
+    total = sum(mined[i + 1] > mined[i] for i in range(len(mined) - 1))
+    return total - len(break_problems(ticks, mined, max_hold_s))
+
+
+def classify_chunks(ticks, n_frames, keep_s, max_hold_s=MAX_HOLD_S, filter_breaks=True):
     """Every FRAME_SKIP-tick chunk with why it was dropped: [(start tick, ticks until break,
     inputs, reason)], reason None for kept chunks (vpt_review.py shows these)."""
     _, mined = logs_mined(ticks)
+    problems = break_problems(ticks, mined, max_hold_s) if filter_breaks else {}
     until_break = [NO_BREAK] * len(ticks)
+    break_reason = [None] * len(ticks)
     next_break = None
     for i in range(len(ticks) - 2, -1, -1):
         if mined[i + 1] > mined[i]:
             next_break = i + 1
         if next_break is not None:
             until_break[i] = next_break - i
+            break_reason[i] = problems.get(next_break)
     chunks = []
     for start in range(0, min(len(ticks), n_frames) - FRAME_SKIP + 1, FRAME_SKIP):
         chunk = ticks[start:start + FRAME_SKIP]
@@ -121,6 +213,8 @@ def classify_chunks(ticks, n_frames, keep_s):
             reason = "after the last log break"
         elif until_break[start] > keep_s * TICKS_PER_SEC:
             reason = f"over {keep_s:g}s before a break"
+        elif break_reason[start]:
+            reason = break_reason[start]
         elif inputs["idle"]:
             reason = "idle"
         else:
@@ -148,25 +242,28 @@ def labels(d):
                      zip(d["dyaw"], d["dpitch"], d["forward"], d["jump"])], dtype=np.int64).reshape(-1, 3)
 
 
-def convert_segment(ticks, video_path, keep_s):
-    """Return (obs, per-example arrays) for one segment."""
-    # Read every frame up front: a 1-minute segment at 640x360 is small. Frame i is what the
-    # player saw when action i (jsonl line i) was taken.
+def convert_segment(ticks, video_path, keep_s, max_hold_s=MAX_HOLD_S):
+    """Return (obs, per-example arrays) for one segment. Frame i is what the player saw when
+    action i (jsonl line i) was taken."""
+    # Decide which frames are needed from the action log alone, then read the video once and keep
+    # only those (a 5-minute recording is ~6,000 frames, too many to hold at 640x360).
+    chosen = select_chunks(ticks, len(ticks), keep_s, max_hold_s)
+    wanted = {start for start, _, _ in chosen}
     cap = cv2.VideoCapture(video_path)
-    frames = []
-    while True:
+    processed = {}
+    i = 0
+    while len(processed) < len(wanted):
         ok, frame = cap.read()
         if not ok:
             break
-        frames.append(frame)
+        if i in wanted:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pov = cv2.resize(rgb, RENDER_RES, interpolation=cv2.INTER_AREA)  # 640x360 -> env's 320x180
+            processed[i] = process_pov(pov)
+        i += 1
     cap.release()
-
-    chosen = select_chunks(ticks, len(frames), keep_s)
-    obs = []
-    for start, _, _ in chosen:
-        rgb = cv2.cvtColor(frames[start], cv2.COLOR_BGR2RGB)
-        pov = cv2.resize(rgb, RENDER_RES, interpolation=cv2.INTER_AREA)  # 640x360 -> env's 320x180
-        obs.append(process_pov(pov))
+    chosen = [c for c in chosen if c[0] in processed]   # the video can end a few frames early
+    obs = [processed[start] for start, _, _ in chosen]
     return np.array(obs, dtype=np.uint8).reshape(-1, OBS_H, OBS_W, 3), chunk_arrays(chosen)
 
 
@@ -206,28 +303,39 @@ def process_one(base, relpath, args):
 
 def _process_one(base, relpath, args):
     name = os.path.splitext(os.path.basename(relpath))[0]
-    out = os.path.join(OUT_DIR, name + ".npz")
-    skip = os.path.join(OUT_DIR, "skipped", name)
+    out_dir = version_dir(args.version)
+    out = os.path.join(out_dir, name + ".npz")
+    skip = os.path.join(out_dir, "skipped", name)
     if os.path.exists(out) or os.path.exists(skip):
         return "done", name, 0, 0
+
+    def remember_skip(reason):   # so re-runs don't download it again
+        with open(skip, "w") as f:
+            f.write(reason)
+
     url = base + relpath
     try:
-        ticks = parse_ticks(fetch(url.replace(".mp4", ".jsonl")).decode())
+        # errors="replace": a few logs have a stray non-UTF-8 byte (in typed text), which we never use
+        ticks = parse_ticks(fetch(url.replace(".mp4", ".jsonl"), timeout=300).decode(errors="replace"))
     except urllib.error.HTTPError as e:
+        if e.code == 404:
+            remember_skip("missing (404)")
         return f"missing ({e.code})", name, 0, 0
-    # Cheap check before downloading the ~30 MB video
-    gained, _ = logs_mined(ticks)
+    # Cheap check before downloading the 30-170 MB video: enough breaks that pass break_problems
+    gained = good_breaks(ticks, args.max_hold)
     if gained < args.min_logs:
-        open(skip, "w").close()   # remember, so re-runs don't download it again
+        remember_skip(f"few logs ({gained})")
         return "few logs", name, gained, 0
-    with tempfile.NamedTemporaryFile(suffix=".mp4", dir=OUT_DIR, delete=True) as tmp:
+    with tempfile.NamedTemporaryFile(suffix=".mp4", dir=out_dir, delete=True) as tmp:
         try:
-            tmp.write(fetch(url, timeout=300))
+            with urllib.request.urlopen(url, timeout=300) as r:
+                shutil.copyfileobj(r, tmp, 1 << 20)
             tmp.flush()
         except urllib.error.HTTPError as e:
             return f"missing ({e.code})", name, 0, 0
-        obs, arrays = convert_segment(ticks, tmp.name, args.keep)
-    np.savez_compressed(out + ".tmp.npz", obs=obs, **arrays, logs_mined=gained, source=relpath)
+        obs, arrays = convert_segment(ticks, tmp.name, args.keep, args.max_hold)
+    np.savez_compressed(out + ".tmp.npz", obs=obs, **arrays, logs_mined=gained, source=relpath,
+                        version=args.version, max_hold=args.max_hold)
     os.replace(out + ".tmp.npz", out)  # so a half-written file is never picked up
     if args.preview:
         save_preview_for(out)
@@ -238,16 +346,16 @@ def save_preview_for(npz_path):
     d = np.load(npz_path)
     near = d["until_break"] <= PREVIEW_WINDOW_S * TICKS_PER_SEC   # what bc_train.py uses by default
     name = os.path.splitext(os.path.basename(npz_path))[0]
-    save_preview(os.path.join(OUT_DIR, "previews", name + ".jpg"), d["obs"][near], labels(d)[near])
+    save_preview(os.path.join(os.path.dirname(npz_path), "previews", name + ".jpg"), d["obs"][near], labels(d)[near])
 
 
-def summarize():
+def summarize(out_dir=OUT_DIR):
     """Print how the stored examples map onto the env's actions, and how well the camera steps
     fit what the humans actually did."""
-    files = sorted(f for f in os.listdir(OUT_DIR) if f.endswith(".npz"))
+    files = sorted(f for f in os.listdir(out_dir) if f.endswith(".npz"))
     acts, dyaw, dpitch, stored = [], [], [], 0
     for f in files:
-        d = np.load(os.path.join(OUT_DIR, f))
+        d = np.load(os.path.join(out_dir, f))
         if "dyaw" not in d:
             print(f"(skipping {f}: old format, run --relabel)")
             continue
@@ -280,7 +388,8 @@ def relabel(path, base):
     are re-selected with the same rules, and must line up with the stored frames."""
     d = dict(np.load(path))
     ticks = parse_ticks(fetch(base + str(d["source"]).replace(".mp4", ".jsonl")).decode())
-    chosen = select_chunks(ticks, 10 ** 9, keep_s=20)   # the old run kept 20 s before a break
+    # the old run kept 20 s before a break, and didn't have break_problems' checks
+    chosen = select_chunks(ticks, 10 ** 9, keep_s=20, filter_breaks=False)
     n = len(d["obs"])
     arrays = chunk_arrays(chosen[:n])  # the old run stopped where the video ended (at most a few ticks early)
     if len(chosen) < n or not np.array_equal(arrays["until_break"], d["until_break"]):
@@ -313,8 +422,13 @@ def relabel_all(workers):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--segments", type=int, default=300, help="treechop segments to convert (that pass the filter)")
-    parser.add_argument("--min-logs", type=int, default=5, help="skip segments where fewer logs were broken")
+    parser.add_argument("--version", type=int, default=6, choices=sorted(INDEX_URLS),
+                        help="VPT dataset: 6 = treechop segments (data/vpt_6xx_treechop), 7-10 = other tasks (data/vpt_<N>xx)")
+    parser.add_argument("--segments", type=int, default=300, help="segments to convert (that pass the filter)")
+    parser.add_argument("--all", action="store_true", help="go through every recording in the index (ignores --segments)")
+    parser.add_argument("--min-logs", type=int, default=5, help="skip segments where fewer good log breaks happened")
+    parser.add_argument("--max-hold", type=float, default=MAX_HOLD_S,
+                        help="ignore log breaks that took longer than this many seconds of attacking (by hand / slow tool)")
     parser.add_argument("--keep", type=float, default=20,
                         help="store examples up to this many seconds before a log break (bc_train.py --window picks from these)")
     parser.add_argument("--workers", type=int, default=6, help="parallel downloads")
@@ -325,20 +439,29 @@ def main():
     parser.add_argument("--summary", action="store_true", help="just print the dataset summary")
     args = parser.parse_args()
 
+    out_dir = version_dir(args.version)
     if args.relabel or args.summary:
         if args.relabel:
             relabel_all(args.workers)
-        summarize()
+        summarize(out_dir)
         return
 
-    os.makedirs(os.path.join(OUT_DIR, "skipped"), exist_ok=True)
-    os.makedirs(os.path.join(OUT_DIR, "previews"), exist_ok=True)
-    index = json.loads(fetch(INDEX_URL))
-    relpaths = [p for p in index["relpaths"] if os.path.basename(p).startswith("treechop-")]
+    os.makedirs(os.path.join(out_dir, "skipped"), exist_ok=True)
+    os.makedirs(os.path.join(out_dir, "previews"), exist_ok=True)
+    for f in os.listdir(out_dir):   # leftovers from a run that was killed mid-download
+        if f.endswith(".tmp.npz") or (f.startswith("tmp") and f.endswith(".mp4")):
+            os.remove(os.path.join(out_dir, f))
+    index = json.loads(fetch(INDEX_URLS[args.version]))
+    relpaths = index["relpaths"]
+    if args.version == 6:
+        relpaths = [p for p in relpaths if os.path.basename(p).startswith("treechop-")]
     random.Random(args.seed).shuffle(relpaths)
-    print(f"{len(relpaths)} treechop segments in the VPT index; converting until {args.segments} pass the filter")
+    if args.all:
+        args.segments = len(relpaths)
+    print(f"{len(relpaths)} recordings in the VPT {args.version}.x index; converting until {args.segments} "
+          f"pass the filter -> {out_dir}/")
 
-    ok = sum(f.endswith(".npz") for f in os.listdir(OUT_DIR))
+    ok = sum(f.endswith(".npz") for f in os.listdir(out_dir))
     it = iter(relpaths)
     with ThreadPoolExecutor(args.workers) as pool:
         running = set()
@@ -371,7 +494,7 @@ def main():
             print("\nStopped by Ctrl+C (finished segments are kept)")
             for f in running:
                 f.cancel()
-    summarize()
+    summarize(out_dir)
 
 
 if __name__ == "__main__":

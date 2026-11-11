@@ -34,11 +34,7 @@ import vpt_data as V
 from train_treechop import OBS_H, OBS_W, RENDER_RES, RUNS_DIR, describe_action, human_to_action, process_pov
 
 OUT_DIR = os.path.join(RUNS_DIR, "vpt_review")
-# One index per VPT dataset version. Only 6.x has "treechop-*" segments; the others are other
-# tasks, but players chop trees in them too (the log filter works the same on any recording).
-INDEX_URLS = {6: V.INDEX_URL} | {
-    v: f"https://openaipublic.blob.core.windows.net/minecraft-rl/snapshots/all_{v}xx_{d}.json"
-    for v, d in ((7, "Apr_6"), (8, "Jun_29"), (9, "Jun_29"), (10, "Jun_29"))}
+INDEX_URLS = V.INDEX_URLS
 VID_W, VID_H = 640, 360
 PANEL_W = 470   # text column + the network's view beside it
 BAR_H = 34
@@ -198,7 +194,7 @@ def review(relpath, base, args, stored=None):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("segments", nargs="*", help="segment names (e.g. treechop-05e006bbcdec-20210904-183454)")
-    parser.add_argument("--kept", type=int, default=None, help="random segments from data/vpt_treechop/")
+    parser.add_argument("--kept", type=int, default=None, help="random segments from data/vpt_6xx_treechop/")
     parser.add_argument("--skipped", type=int, default=None, help="random segments that failed the log filter")
     parser.add_argument("--new", type=int, default=0, help="random segments vpt_data.py never processed")
     parser.add_argument("--version", type=int, default=6, choices=sorted(INDEX_URLS),
