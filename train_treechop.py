@@ -28,6 +28,8 @@ import json
 import logging
 import os
 import sys
+
+import networks
 from datetime import datetime
 
 # In WSL, OpenGL defaults to "llvmpipe" (drawing on the CPU). These settings make Minecraft draw
@@ -374,12 +376,15 @@ SCRATCH = {"learning_rate": 2.5e-4, "ent_coef": 0.01, "target_kl": None}
 FINETUNE = {"learning_rate": 1e-4, "ent_coef": 0.001, "target_kl": 0.02}
 
 
-def new_model(env, n_steps=1024, tb_dir=None, learning_rate=2.5e-4, ent_coef=0.01, target_kl=None):
+def new_model(env, n_steps=1024, tb_dir=None, learning_rate=2.5e-4, ent_coef=0.01, target_kl=None,
+              arch="nature"):
     """A fresh PPO model. Also used by bc_train.py, so a behaviour-cloned model has exactly the
-    same network and settings and can be watched, evaluated or resumed like any other run."""
+    same network and settings and can be watched, evaluated or resumed like any other run.
+    arch: the image network, a key of networks.ARCHS ("nature" = SB3's default NatureCNN)."""
     return PPO(
         "CnnPolicy",
         env,
+        policy_kwargs=networks.ARCHS[arch] or None,
         n_steps=n_steps,
         batch_size=64,
         learning_rate=learning_rate,
@@ -472,14 +477,15 @@ def train(timesteps, n_steps, n_envs, mc_mem=None, resume=None, name=None, init=
             return
         model.tensorboard_log = tb_dir  # keep logging into this run's folder
     else:
-        model = new_model(env, n_steps, tb_dir, **settings)
+        start = PPO.load(init_path, device="cuda") if init_path else None
+        problem = start and model_mismatch(start)
+        if problem:
+            print(problem)
+            env.close()
+            return
+        model = new_model(env, n_steps, tb_dir, **settings,
+                          arch=networks.arch_of(start) if start else "nature")
         if init_path:
-            start = PPO.load(init_path, device="cuda")
-            problem = model_mismatch(start)
-            if problem:
-                print(problem)
-                env.close()
-                return
             model.policy.load_state_dict(start.policy.state_dict())
             print(f"Starting from the weights of {init_path} (fine-tuning: {settings})")
         else:

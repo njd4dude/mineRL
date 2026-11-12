@@ -47,6 +47,7 @@ import torch
 import torch.nn.functional as F
 from torch.utils.tensorboard import SummaryWriter
 
+import networks
 import train_treechop as T
 from vpt_data import labels
 
@@ -250,6 +251,8 @@ def main():
     parser.add_argument("--data", nargs="+", default=[DATA_DIR],
                         help="vpt_data.py output folders to train on (e.g. data/vpt_6xx data/vpt_8xx)")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--arch", default="nature", choices=sorted(networks.ARCHS),
+                        help='image network: "nature" (NatureCNN, 0.6M params) or "impala" (ResNet, see networks.py)')
     parser.add_argument("--name", default="bc", help='label for the run folder, e.g. "bc_6xx-1762_8xx-1957" (data used)')
     parser.add_argument("--init", default=None,
                         help="continue training this BC model (run folder or .zip) instead of a new network; "
@@ -289,7 +292,9 @@ def main():
         args.init = init_path
 
     run_dir = T.new_run_dir(args.name, "bc")
-    model = T.new_model(SpacesOnlyEnv(), tb_dir=os.path.join(run_dir, "tb"))
+    if args.init:
+        args.arch = networks.arch_of(start)   # continue with the same network
+    model = T.new_model(SpacesOnlyEnv(), tb_dir=os.path.join(run_dir, "tb"), arch=args.arch)
     if args.init:
         model.policy.load_state_dict(start.policy.state_dict())
         del start
@@ -350,11 +355,11 @@ def main():
         print(f"epoch {epoch:2d}  train loss {total / steps_per_epoch:.3f}  val loss {val_loss:.3f}  " +
               "  ".join(f"{name} {100 * a:.1f}%" for (name, _), a in zip(PARTS, acc)) + mark +
               "".join(f"\n          val loss {os.path.basename(d)} {v:.3f}" for d, v in per_dir.items()))
+        with open(os.path.join(run_dir, "bc_history.json"), "w") as f:   # every epoch, so a stopped run keeps it
+            json.dump(history, f, indent=2)
     print("Always guessing the most common answer would get: " +
           "  ".join(f"{name} {100 * b:.1f}%" for (name, _), b in zip(PARTS, baseline)))
     writer.close()
-    with open(os.path.join(run_dir, "bc_history.json"), "w") as f:
-        json.dump(history, f, indent=2)
     print(f"Best model (lowest validation loss) saved to {os.path.join(run_dir, T.FINAL_NAME)}")
 
 
