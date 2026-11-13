@@ -159,7 +159,8 @@ def _run_job(job):
     if info.get("env_error"):
         print(f"  WARNING: Minecraft failed during {label} seed {seed} at step {step}; "
               f"its score only counts the steps before that", flush=True)
-    return label, seed, info["logs"], time.time() - start, step if info.get("died") else None
+    won_at = step if info["logs"] >= T.LOGS_TO_WIN else None   # how fast it cleared the world
+    return label, seed, info["logs"], time.time() - start, step if info.get("died") else None, won_at
 
 
 RANDOM_DIR = os.path.join(T.RUNS_DIR, "random")   # random actions have no run folder; their evals go here
@@ -235,24 +236,30 @@ def main():
 
     results = {label: {} for label, _ in policies}
     deaths = {label: {} for label, _ in policies}
+    wins = {label: {} for label, _ in policies}   # seed -> step the game reached LOGS_TO_WIN
     ctx = mp.get_context("forkserver")
     with ctx.Pool(args.workers, initializer=_init_worker, initargs=(args.mc_mem,)) as pool:
-        for label, seed, logs, secs, died_at in pool.imap_unordered(_run_job, jobs):
+        for label, seed, logs, secs, died_at, won_at in pool.imap_unordered(_run_job, jobs):
             results[label][seed] = logs
             if died_at:
                 deaths[label][seed] = died_at
+            if won_at:
+                wins[label][seed] = won_at
             death = f"  DIED at step {died_at}" if died_at else ""
-            print(f"  {label:55s} seed {seed:3d}: {logs:3d} logs  ({secs:.0f}s){death}", flush=True)
+            won = f"  (64 at step {won_at})" if won_at else ""
+            print(f"  {label:55s} seed {seed:3d}: {logs:3d} logs  ({secs:.0f}s){death}{won}", flush=True)
 
     # Table: one row per policy, one column per seed
     print("\nLogs collected per world (same worlds for every policy):")
-    header = f"{'policy':55s} " + " ".join(f"s{s:<4d}" for s in args.seeds) + "   mean   std  deaths"
+    header = f"{'policy':55s} " + " ".join(f"s{s:<4d}" for s in args.seeds) + "   mean   std  deaths  won  steps to win (median)"
     print(header)
     print("-" * len(header))
     for label, _ in policies:
         vals = [results[label][s] for s in args.seeds]
         print(f"{label:55s} " + " ".join(f"{v:<5d}" for v in vals) +
-              f"  {np.mean(vals):5.1f}  {np.std(vals):4.1f}  {len(deaths[label])}/{len(vals)}")
+              f"  {np.mean(vals):5.1f}  {np.std(vals):4.1f}  {len(deaths[label])}/{len(vals)}"
+              f"  {len(wins[label]):2d}/{len(vals)}  " +
+              (f"{np.median(list(wins[label].values())):.0f}" if wins[label] else "-"))
 
     # One results.json per run folder, holding that run's models (a run can have several checkpoints)
     print()
@@ -262,6 +269,7 @@ def main():
             json.dump({"seeds": args.seeds, "steps": args.steps,
                        "results": {l: results[l] for l in mine},
                        "died_at_step": {l: deaths[l] for l in mine},
+                       "won_at_step": {l: wins[l] for l in mine},
                        "evaluated_with": [l for l, _ in policies if l not in mine]}, f, indent=2)
         print(f"Saved to {d}/" + (" (results.json + videos)" if args.record else " (results.json)"))
 

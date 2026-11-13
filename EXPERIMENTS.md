@@ -54,6 +54,7 @@ in `runs/renamed_runs.json`).
 | BC `bc_impala_6xx-1763_8xx-1971` (ImpalaCNN, 6.x + 8.x only, 3,734 segments, 20 epochs) | 51.1 | 64 | 13 | **0** | 2/24 (seeds 5, 11) | `evals/20261112_124707` |
 | `ppo_bc_6xx-304_kl05` checkpoint at 120k                                       | **34.3** | 30.5   | 3         | 2 (seeds 13, 22) | **1/24** (seed 5, not drowning)         | `evals/20261110_193136` + `evals/20261110_220203` |
 | `ppo_bc_6xx-1762_8xx-1957_plus20_kl05` (PPO 120k from the 42.8 BC model)      | **59.8** | 64     | **19**    | **0**            | **0/24**                                | `evals/20261111_191652`                           |
+| `ppo_bc_impala_all_kl05` (PPO 120k from the 58.8 ImpalaCNN BC model)                | 59.6 | 64 | 17 | **0** | 1/24 (seed 8, step 638) | `evals/20261112_160817` |
 
 
 The fine-tuned model beat BC on 18 of 24 worlds, lost on 4 and tied on 2: on average +15.7 logs per world
@@ -99,6 +100,19 @@ ImpalaCNN (`networks.py`, `bc_train.py --arch impala`): IMPALA-style ResNet, cha
 `bc_impala_6xx-1763_8xx-1971`: the same ImpalaCNN on 6.x + 8.x only (3,734 segments, ~2.3 min per epoch plus a new 13 GB frame cache). Validation loss 2.994 (on 6.x + 8.x held-out clips only); on the same clips the all-versions ImpalaCNN is better: 6.x 2.953 vs 2.973, 8.x 2.973 vs 3.002. Game score 51.1: against the all-versions ImpalaCNN -7.6 per world (standard error about 4.6, better on 11, worse on 8; the gap comes from a few worlds where it scored 6-24 and the all-versions model got 64: seeds 5, 9, 11, 21, 22), against NatureCNN on the same data (`_plus20`, 40 epochs) +8.3 (about 2.9). So with the bigger network the extra versions probably help (lower validation loss on the same clips, fewer very bad games), but the game-score gap is within about 1.7 standard errors.
 
 `ppo_bc_6xx-1762_8xx-1957_plus20_kl05`: PPO fine-tune of `_plus20` (lr 1e-4, ent 0.001, target_kl 0.05, 120k steps, 4 envs, ~2.7 h). Game score 59.8 (median 64): 19 of 24 worlds hit the 64-log cap, no deaths, lowest seeds 11 (26) and 23 (27). Against its BC start: +17.0 per world (standard error about 4.0, better on 19, worse on 2). Training reward at the end ~55 per 2,000-step episode. So PPO still adds a lot on top of a better BC model, and the 1,000-step eval is now near its ceiling: further gains will need a harder test (more steps, or a log count beyond 64).
+
+`ppo_bc_impala_all_kl05`: PPO fine-tune of the ImpalaCNN all-versions BC model (same settings as the other fine-tunes: lr 1e-4, ent 0.001, target_kl 0.05, 5 value warm-up updates, 120k steps, 4 envs, `--mc-mem 2G`, ~3 h incl. 9 Minecraft restarts: 4 at startup, 2 Java OutOfMemoryErrors). Training reward rose from ~46 to 58.6 per 2,000-step episode. Game score 59.6: against its BC start +0.8 per world (standard error about 2.0, better on 8, worse on 8), against the NatureCNN fine-tune (59.8) -0.2 (about 2.6). Worst worlds: seed 1 (30, the BC model's worst too), 11 and 18 (46). The 1,000-step test can no longer separate these models (17 of 24 worlds at 64); the training reward (55.7 -> 58.6 at the same step count) suggests this one is better over 2,000 steps.
+
+Steps to 64 logs (`won_at_step` in results.json, recorded by `evaluate.py` from Nov 12; for older evals recovered from the video frame counts, +-1 step), for worlds that reached 64 within 1,000 steps:
+
+| model | mean logs | worlds at 64 | median steps to 64 | mean | fastest | slowest |
+| --- | --- | --- | --- | --- | --- | --- |
+| BC NatureCNN `_plus20` | 42.8 | 4/24 | 800 | 788 | 589 | 964 |
+| BC ImpalaCNN all versions | 58.8 | 14/24 | 789 | 762 | 401 | 1000 |
+| PPO on NatureCNN `_plus20` | 59.8 | 19/24 | 756 | 746 | 538 | 969 |
+| PPO on ImpalaCNN all versions | 59.6 | 17/24 | 667 | 695 | 538 | 876 |
+
+On the worlds both reached 64: PPO ImpalaCNN vs PPO NatureCNN -51 steps (standard error about 32, faster on 9 of 14), vs its BC start -54 (about 50, 10 worlds). So the ImpalaCNN fine-tune is probably the fastest, but not clearly; playing each world 2-3 times would firm this up.
 
 Random actions and PPO from scratch (30k steps, same actions and setup as now, no BC) were run on the same 24 worlds on Nov 11: 2.5 and 3.0 logs per game (from scratch minus random: +0.5, standard error about 0.9, so no better than random).
 
