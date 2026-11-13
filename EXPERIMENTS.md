@@ -139,6 +139,22 @@ the BC model already does some of the time.
 - Training logs per game (`ep_rew_mean`) can't be compared directly with eval scores: training
   games are 2,000 steps and use random worlds.
 
+**Sampling beats deterministic actions** (`evaluate.py --deterministic` always takes the most
+likely action; the default samples one). Seed 1 only, 1,000 steps:
+
+| model | deterministic | sampling |
+| --- | --- | --- |
+| PPO `ppo_bc_impala_all_kl05` | 30, 16, 8 (mean 18.0) | 30, 64, 57 (mean 50.3) |
+| BC ImpalaCNN all versions | 4 | 28 |
+
+In the videos, deterministic games get stuck: after the first tree the agent stands under the
+leaves looking up, with the action "stand, no turn" for the last ~900 steps. That's the most likely
+action for a view it doesn't recognise, and standing still never changes the view, so it never
+breaks out. Sampling sometimes turns or walks, the view changes, and it finds the next tree. BC
+learns the mix of actions humans take (and PPO trains by sampling), so the policy is meant to be
+sampled. Evals stay on sampling. PPO runs: `ppo_bc_impala_all_kl05`'s
+`evals/20261112_seed1_deterministic_vs_sampling/`; BC run: `..._cont`'s `evals/20261112_170436/`.
+
 **The 1,000-step test is now near its limit** (14-19 of 24 worlds at 64 logs for the best models).
 Every world has been cleared by some model, and different models fail on different worlds, so the
 remaining misses are mostly bad luck. To compare the best models: use steps to reach 64, and play
@@ -150,7 +166,9 @@ each world 2-3 times.
   plains or near water.
 - After PPO: drowning gone; left: digging into the ground (attack is held, so looking down digs),
   wandering into dark caves (seed 5 death, likely a mob), getting stuck in hilly terrain by water.
-- ImpalaCNN BC and its fine-tune both do worst on seed 1 (28 and 30 logs).
+- ImpalaCNN BC and its fine-tune both do worst on seed 1 (28 and 30 logs), but partly luck: two
+  more sampling games of the PPO model on seed 1 got 64 and 57.
+- Deterministic actions: stuck standing under a tree looking up into the leaves (see above).
 
 ## Evaluation noise
 
@@ -189,5 +207,4 @@ at 30k. 4 worlds (`bc_6xx-304`'s `evals/20261110_162445`, `_192334`): BC 25.2, `
 
 - Make the test discriminate again: compare steps to 64, play each world 2-3 times.
 - Longer PPO on ImpalaCNN BC (300-500k steps, overnight) with `--mc-mem 3G` and staggered startup.
-- Look at the seed 1 videos (both ImpalaCNN models fail there).
 - Off-policy demo-based RL (DQfD / SQIL) or a faster simulator (CraftGround trial) to afford more RL.
