@@ -157,6 +157,12 @@ each world 2-3 times.
 - The same model on the same world isn't repeatable (BC on seed 3: 64, 64, 16, 14), and Minecraft
   itself isn't deterministic (frames diverge by tick ~20 with the same actions).
 - So: 24 worlds, paired differences with SE, and treat a few logs as noise.
+- The same seed gives the same spawn (position and facing) almost always: 355 of 356 eval videos of
+  seeds 1-24 started from the same view as the other games on that seed. The exception: seed 3 in
+  `bc_6xx-1762_8xx-1957`'s eval (`20261111_131528`) spawned underground and scored 0, so its 38.3 is
+  about 1-2 logs too low. A test on Nov 12 also got seed 3 by a desert village in a fresh Minecraft.
+  Since Nov 12 `evaluate.py` compares each first frame with `eval_spawn_refs.npz` and re-spawns
+  unusual ones in a fresh Minecraft (`unusual_spawns` in results.json).
 
 ## Infrastructure
 

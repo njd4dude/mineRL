@@ -209,8 +209,9 @@ class TreechopEnv(gymnasium.Env):
         super().reset(seed=seed)
         for attempt in range(1, attempts + 1):
             try:
-                if self.needs_restart:
-                    self._restart_minecraft("failed during the last episode")
+                if self.needs_restart:   # True, or a reason (str) set by the caller
+                    self._restart_minecraft(self.needs_restart if isinstance(self.needs_restart, str)
+                                            else "failed during the last episode")
                 if seed is not None:
                     self.env.seed(seed)  # same seed = same world (MineRL only applies it to this reset)
                 obs = self.env.reset()
@@ -222,6 +223,7 @@ class TreechopEnv(gymnasium.Env):
                 print(f"reset failed ({type(e).__name__}: {e}), attempt {attempt}/{attempts}", flush=True)
         self.prev_logs = self._count_logs(obs)
         self.died = False
+        self.first_pov = obs["pov"]   # full-size first frame (evaluate.py checks the spawn with it)
         if self.on_frame:
             self.on_frame(obs["pov"])
         self.last_pov = process_pov(obs["pov"])

@@ -40,6 +40,30 @@ AGENT_BIG = 512      # --video agent: the 64x64 view enlarged 8x
 BAR_H = 60           # --video agent: text bar under the view
 VIDEO_LAYOUTS = ["both", "game", "agent"]
 
+# Spawn check: the same seed almost always spawns the player at the same place facing the same way,
+# but not always (seed 3 once spawned underground, once by a desert village). eval_spawn_refs.npz
+# holds each seed's usual first view (the middle of the game frame, shrunk to 56x24), made on
+# Nov 12 from the first frames of all 356 eval videos of seeds 1-24 (the median of each seed's
+# matching videos). A game whose first view differs by more than SPAWN_MAX_DIFF (mean absolute
+# pixel difference, 0-255) is re-spawned in a fresh Minecraft. Normal spawns differ by about 2-4
+# (12 at most), the bad ones seen so far by 21 and 67.
+SPAWN_REFS = "eval_spawn_refs.npz"
+SPAWN_MAX_DIFF = 15
+SPAWN_TRIES = 3
+_spawn_refs = None
+
+
+def spawn_diff(seed, pov):
+    """How different this game's first frame is from the seed's usual spawn, or None if unknown."""
+    global _spawn_refs
+    if _spawn_refs is None:
+        _spawn_refs = dict(np.load(SPAWN_REFS)) if os.path.exists(SPAWN_REFS) else {}
+    ref = _spawn_refs.get(f"seed{seed}")
+    if ref is None:
+        return None
+    small = cv2.resize(pov[30:150, 20:300], (56, 24), interpolation=cv2.INTER_AREA)
+    return float(np.abs(small.astype(float) - ref.astype(float)).mean())
+
 
 def _bgr(img):
     return cv2.cvtColor(img, cv2.COLOR_RGB2BGR)   # MineRL gives RGB, OpenCV writes BGR
@@ -108,7 +132,7 @@ def _init_worker(mc_mem):
 
 def _run_job(job):
     """Play one policy on one seeded world. Returns (policy label, seed, logs, seconds, step it died
-    at or None)."""
+    at or None, step it reached LOGS_TO_WIN or None, spawn note or None)."""
     label, path, seed, steps, video_path, layout = job
     import torch
     from stable_baselines3 import PPO
@@ -130,9 +154,26 @@ def _run_job(job):
                 # _env.prev_logs (not info) is updated every tick, so the count is never a step behind
                 writer.write(render_frame(layout, pov, state["step"], steps, _env.prev_logs, state["action"]))
             state["tick"] += 1
-        _env.on_frame = on_frame
+    spawn_note = None
     try:
         obs, _ = _env.reset(seed=seed)
+        for attempt in range(1, SPAWN_TRIES + 1):
+            diff = spawn_diff(seed, _env.first_pov)
+            if diff is None or diff <= SPAWN_MAX_DIFF:
+                break
+            print(f"  WARNING: {label} seed {seed} spawned somewhere unusual (difference {diff:.0f} > "
+                  f"{SPAWN_MAX_DIFF}), try {attempt}/{SPAWN_TRIES}" +
+                  ("; restarting Minecraft" if attempt < SPAWN_TRIES else "; playing it anyway"), flush=True)
+            spawn_note = f"unusual spawn (difference {diff:.0f})"
+            if attempt == SPAWN_TRIES:
+                break
+            _env.needs_restart = "unusual spawn"   # the same Minecraft tends to repeat the same spawn
+            obs, _ = _env.reset(seed=seed)
+        if diff is not None and diff <= SPAWN_MAX_DIFF and spawn_note:
+            spawn_note = f"re-spawned ({spawn_note} first)"
+        if writer:   # start recording only now, so a video never shows a rejected spawn
+            _env.on_frame = on_frame
+            on_frame(_env.first_pov)
         for step in range(1, steps + 1):
             if path is None:
                 action = [rng.randint(n) for n in T.ACTION_DIMS]
@@ -160,7 +201,8 @@ def _run_job(job):
         print(f"  WARNING: Minecraft failed during {label} seed {seed} at step {step}; "
               f"its score only counts the steps before that", flush=True)
     won_at = step if info["logs"] >= T.LOGS_TO_WIN else None   # how fast it cleared the world
-    return label, seed, info["logs"], time.time() - start, step if info.get("died") else None, won_at
+    return (label, seed, info["logs"], time.time() - start, step if info.get("died") else None, won_at,
+            spawn_note)
 
 
 RANDOM_DIR = os.path.join(T.RUNS_DIR, "random")   # random actions have no run folder; their evals go here
@@ -237,9 +279,12 @@ def main():
     results = {label: {} for label, _ in policies}
     deaths = {label: {} for label, _ in policies}
     wins = {label: {} for label, _ in policies}   # seed -> step the game reached LOGS_TO_WIN
+    spawns = {label: {} for label, _ in policies}   # seed -> note, for games with an unusual spawn
     ctx = mp.get_context("forkserver")
     with ctx.Pool(args.workers, initializer=_init_worker, initargs=(args.mc_mem,)) as pool:
-        for label, seed, logs, secs, died_at, won_at in pool.imap_unordered(_run_job, jobs):
+        for label, seed, logs, secs, died_at, won_at, spawn_note in pool.imap_unordered(_run_job, jobs):
+            if spawn_note:
+                spawns[label][seed] = spawn_note
             results[label][seed] = logs
             if died_at:
                 deaths[label][seed] = died_at
@@ -270,6 +315,7 @@ def main():
                        "results": {l: results[l] for l in mine},
                        "died_at_step": {l: deaths[l] for l in mine},
                        "won_at_step": {l: wins[l] for l in mine},
+                       "unusual_spawns": {l: spawns[l] for l in mine},
                        "evaluated_with": [l for l, _ in policies if l not in mine]}, f, indent=2)
         print(f"Saved to {d}/" + (" (results.json + videos)" if args.record else " (results.json)"))
 
