@@ -34,19 +34,19 @@ PPO fine-tunes: lr 1e-4, ent 0.001, target_kl 0.05, 5 value warm-up updates, 120
 
 | policy | mean | median | worlds at 64 | 0-log games | deaths | eval |
 | --- | --- | --- | --- | --- | --- | --- |
-| random actions | 2.5 | 1.5 | 0 | 6 | 1 | `runs/random/evals/20261111_155924` |
-| PPO from scratch `ppo_scratch_30k` (30k steps) | 3.0 | 1.5 | 0 | 8 | 6 | `20261111_155924` |
-| BC `bc_6xx-304` | 18.7 | 15.5 | 2 | 3 | 6 (drowning) | `20261110_114949` |
-| BC `bc_6xx-1603` | 26.5 | 22 | 4 | 0 | 4 | `20261111_105730` |
-| BC `bc_6xx-1762_8xx-1957` (3,719 segments, 1.13M examples) | 38.3 | 38.5 | 7 | 2 | 0 | `20261111_131528` |
-| BC `..._plus20` (40 epochs) | 42.8 | 44.5 | 4 | 0 | 3 | `20261111_142003` |
-| BC `..._plus40` (60 epochs) | 37.5 | 36 | 7 | 1 | 1 | `20261111_145652` |
-| BC `bc_6xx-1763_7xx-2256_8xx-1971_9xx-832_10xx-777` (all versions, 7,599 segments) | 41.6 | 42 | 6 | 0 | 1 | `20261111_211618` |
-| BC `bc_impala_6xx-1763_8xx-1971` (ImpalaCNN, 6.x + 8.x) | 51.1 | 64 | 13 | 0 | 2 | `20261112_124707` |
-| BC `bc_impala_..._10xx-777_cont` (ImpalaCNN, all versions) | **58.8** | 64 | 14 | 0 | 0 | `20261112_111541` |
-| PPO `ppo_bc_6xx-304_kl05` (120k checkpoint) | 34.3 | 30.5 | 3 | 2 | 1 | `20261110_193136` + `_220203` |
 | PPO `ppo_bc_6xx-1762_8xx-1957_plus20_kl05` | **59.8** | 64 | 19 | 0 | 0 | `20261111_191652` |
 | PPO `ppo_bc_impala_all_kl05` | **59.6** | 64 | 17 | 0 | 1 | `20261112_160817` |
+| BC `bc_impala_..._10xx-777_cont` (ImpalaCNN, all versions) | **58.8** | 64 | 14 | 0 | 0 | `20261112_111541` |
+| BC `bc_impala_6xx-1763_8xx-1971` (ImpalaCNN, 6.x + 8.x) | 51.1 | 64 | 13 | 0 | 2 | `20261112_124707` |
+| BC `bc_6xx-1762_8xx-1957_plus20` (40 epochs) | 42.8 | 44.5 | 4 | 0 | 3 | `20261111_142003` |
+| BC `bc_6xx-1763_7xx-2256_8xx-1971_9xx-832_10xx-777` (all versions, 7,599 segments) | 41.6 | 42 | 6 | 0 | 1 | `20261111_211618` |
+| BC `bc_6xx-1762_8xx-1957` (3,719 segments, 1.13M examples) | 38.3 | 38.5 | 7 | 2 | 0 | `20261111_131528` |
+| BC `bc_6xx-1762_8xx-1957_plus40` (60 epochs) | 37.5 | 36 | 7 | 1 | 1 | `20261111_145652` |
+| PPO `ppo_bc_6xx-304_kl05` (120k checkpoint) | 34.3 | 30.5 | 3 | 2 | 1 | `20261110_193136` + `_220203` |
+| BC `bc_6xx-1603` | 26.5 | 22 | 4 | 0 | 4 | `20261111_105730` |
+| BC `bc_6xx-304` | 18.7 | 15.5 | 2 | 3 | 6 (drowning) | `20261110_114949` |
+| PPO from scratch `ppo_scratch_30k` (30k steps) | 3.0 | 1.5 | 0 | 8 | 6 | `20261111_155924` |
+| random actions | 2.5 | 1.5 | 0 | 6 | 1 | `runs/random/evals/20261111_155924` |
 
 Scores are **logs collected per game** (1,000 steps, max 64), averaged over the 24 worlds.
 
