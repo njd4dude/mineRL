@@ -1,244 +1,187 @@
 # Experiment log
 
-Results and observations from training the treechop agent. Each evaluation is saved in the run
-folder of every model it scored, as `runs/<kind>/<run>/evals/<date>_<time>/results.json` (logs per
-seed, plus which other models were scored on the same worlds), with the game videos next to it when
-`--record` was used (`final_seed3.mp4`, ...). Random actions: `runs/random/evals/`. Below, an eval is
-referred to by its `<date>_<time>`, e.g. `evals/20261110_114949` in that model's run folder.
+Results from training the treechop agent. Each evaluation is saved in the run folder of every model
+it scored: `runs/<kind>/<run>/evals/<date>_<time>/results.json` (logs per seed, `died_at_step`,
+`won_at_step`, the other models scored on the same worlds) plus game videos with `--record`
+(`final_seed3.mp4`, ...). Random actions: `runs/random/evals/`. Below, `evals/<date>_<time>` means
+that folder in the model's own run folder.
 
-## Setup (current)
+## Setup
 
-- Env: `MineRLTreechopAxe320-v0`, 320x180 render, the agent sees 64x64 (HUD cropped), frame skip 4.
-Attack is always held.
-- Actions: `[move, yaw, pitch]` = 3 x 11 x 9 (MultiDiscrete). Move: stand / forward / forward+jump.
-- Reward: +1 per log collected. The episode ends at 64 logs or on death (the axe count drops to 0).
-- Evaluation: `evaluate.py`, 1000 agent steps per world, the same seeds for every model.
-
-
+- Env `MineRLTreechopAxe320-v0`: 320x180 render, agent sees 64x64 (HUD cropped), frame skip 4,
+  attack always held, starts with an iron axe, time frozen, mobs on.
+- Actions `[move, yaw, pitch]` = 3 x 11 x 9 (MultiDiscrete); move = stand / forward / forward+jump.
+- Reward +1 per log. Episode ends at 64 logs, on death (axe count drops to 0), or after 2,000 steps.
+- Eval: `evaluate.py`, seeds 1-24, 1,000 steps per world, same seeds for every model.
+- Networks (`networks.py`, `--arch`): NatureCNN (SB3 default, 0.61M params) or ImpalaCNN (ResNet,
+  channels 32/64/64, 2 residual blocks per stage, 2.56M params).
 
 ## Run names
 
-Run folders are `runs/<kind>/model_<date>_<time>_<name>`: `runs/bc/` for behaviour cloning
-(bc_train.py), `runs/ppo/` for PPO (train_treechop.py), `runs/test/` for any run whose name starts
-with `test`. Each run's evaluations are in its own `evals/` folder (see above); VPT reviews and
-surveys are in `runs/vpt_review/` and `runs/vpt_survey/`.
-`<name>` says what the run is:
+`runs/<kind>/model_<date>_<time>_<name>`, kind = `bc` (bc_train.py), `ppo` (train_treechop.py) or
+`test` (names starting with `test`).
 
-- `bc_<data>`: behaviour cloning on VPT data, `<version>-<segments>` per data folder, e.g.
-`bc_6xx-1762_8xx-1957` = 1,762 segments from data/vpt_6xx (treechop) + 1,957 from data/vpt_8xx.
-- `ppo_<start>_<setting>`: PPO, starting from a BC model (`ppo_bc_6xx-304_kl05` = from
-`bc_6xx-304`, target_kl 0.05) or from scratch (`ppo_scratch_...`).
-- `test_...`: not a real experiment.
+- `bc_<data>`: data as `<version>-<segments>` per folder, e.g. `bc_6xx-1762_8xx-1957`. `bc_impala_...`
+  = ImpalaCNN. `_plusN` = continued N more epochs with `--init`; `_cont` = continued after a stop.
+- `ppo_<start>_<setting>`: PPO from a BC model (`ppo_bc_6xx-304_kl05` = from `bc_6xx-304`,
+  target_kl 0.05) or from scratch (`ppo_scratch_...`).
+- Old names (`bc_multi`, `bc_all`, `finetune_kl05`, ...) are mapped in `runs/renamed_runs.json`.
 
-The runs were renamed on Nov 11 (old names like `bc_multi`, `bc_all`, `finetune_kl05` are mapped
-in `runs/renamed_runs.json`).
+## Results: 24 worlds, 1,000 steps
 
-## Results
+BC: 20 epochs, lr 3e-4 cosine, 5 s window before each log break, unless noted.
+PPO fine-tunes: lr 1e-4, ent 0.001, target_kl 0.05, 5 value warm-up updates, 120k steps, 4 envs.
 
-
-
-### Main baseline: 24 worlds (seeds 1-24), episodes end on death
-
-
-| policy                                                                         | mean     | median | wins (64) | 0-log games      | deaths                                  | file                                              |
-| ------------------------------------------------------------------------------ | -------- | ------ | --------- | ---------------- | --------------------------------------- | ------------------------------------------------- |
-| random actions | 2.5 | 1.5 | 0 | 6 | 1/24 | `runs/random/evals/20261111_155924` |
-| PPO from scratch `ppo_scratch_30k` (current actions, 30k steps) | 3.0 | 1.5 | 0 | 8 | 6/24 | `evals/20261111_155924` |
-| BC `bc_6xx-304`                                                                | **18.7** | 15.5   | 2         | 3                | 6/24 (all drowning)                     | `evals/20261110_114949`                           |
-| BC `bc_6xx-1603` (1,603 segments, 282k examples)                               | **26.5** | 22     | 4         | 0                | 4/24                                    | `evals/20261111_105730`                           |
-| BC `bc_6xx-1762_8xx-1957` (6.x treechop + 8.x, 3,719 segments, 1.13M examples) | **38.3** | 38.5   | 7         | 2 (seeds 3, 22)  | **0/24**                                | `evals/20261111_131528`                           |
-| BC `bc_6xx-1762_8xx-1957_plus20` (the above + 20 more epochs, lr 1e-4)         | **42.8** | 44.5   | 4         | **0**            | 3/24 (seeds 5, 9, 18, late in the game) | `evals/20261111_142003`                           |
-| BC `bc_6xx-1762_8xx-1957_plus40` (20 more again: 60 epochs in all)             | 37.5     | 36     | 7         | 1 (seed 16)      | 1/24 (seed 24)                          | `evals/20261111_145652`                           |
-| BC `bc_6xx-1763_7xx-2256_8xx-1971_9xx-832_10xx-777` (all versions, 7,599 segments, 20 epochs) | 41.6 | 42 | 6 | **0** | 1/24 (seed 5, step 301) | `evals/20261111_211618` |
-| BC `bc_impala_6xx-1763_7xx-2256_8xx-1971_9xx-832_10xx-777_cont` (same data, ImpalaCNN 2.56M params, 20 epochs) | **58.8** | 64 | 14 (two at 65) | **0** | **0/24** | `evals/20261112_111541` |
-| BC `bc_impala_6xx-1763_8xx-1971` (ImpalaCNN, 6.x + 8.x only, 3,734 segments, 20 epochs) | 51.1 | 64 | 13 | **0** | 2/24 (seeds 5, 11) | `evals/20261112_124707` |
-| `ppo_bc_6xx-304_kl05` checkpoint at 120k                                       | **34.3** | 30.5   | 3         | 2 (seeds 13, 22) | **1/24** (seed 5, not drowning)         | `evals/20261110_193136` + `evals/20261110_220203` |
-| `ppo_bc_6xx-1762_8xx-1957_plus20_kl05` (PPO 120k from the 42.8 BC model)      | **59.8** | 64     | **19**    | **0**            | **0/24**                                | `evals/20261111_191652`                           |
-| `ppo_bc_impala_all_kl05` (PPO 120k from the 58.8 ImpalaCNN BC model)                | 59.6 | 64 | 17 | **0** | 1/24 (seed 8, step 638) | `evals/20261112_160817` |
-
-
-The fine-tuned model beat BC on 18 of 24 worlds, lost on 4 and tied on 2: on average +15.7 logs per world
-(standard error about 3). Minecraft failed partway through 4 of its games: seeds 18, 19 and 20 were
-replayed (`evals/20261110_220203`, 16 -> 26, 9 -> 26, 5 -> 51), and seed 15 failed at step 999 of 1000, so
-it was kept.
-
-Videos: `evals/20261110_193136/` has all 24 seeds, but its seed 18, 19 and 20 videos are from the
-games where Minecraft failed; watch the replays in `evals/20261110_220203/` for those three.
-The BC videos for the same worlds are in `evals/20261110_114949/`.
-
-`bc_6xx-1603` is the same BC recipe as `bc_6xx-304` (20 epochs, window 5 s) on all 1,603 downloaded segments
-instead of 304 (5.6x the examples). Against `bc_6xx-304` on the same worlds: +7.9 logs per world
-(standard error about 2.9), better on 16, worse on 6, tied on 2, and no 0-log games (BC: 3). Its
-validation loss was 3.142 (`bc_6xx-304`: 3.277, but on a different held-out set). No Minecraft errors
-in this eval. Not fine-tuned yet. Videos: `evals/20261111_105730/`.
-
-`bc_6xx-1762_8xx-1957` adds the 8.x (house building) recordings to all 1,762 treechop segments, keeping only
-log breaks with an axe in the inventory, at most 2 s of attacking, and before the player placed any
-logs (vpt_data.py's filter). Same BC settings (20 epochs, window 5 s). Against `bc_6xx-1603`: +11.8 logs
-per world (standard error about 3.8), better on 15, worse on 5, tied on 4; no deaths and no
-Minecraft errors. It beats the fine-tuned `ppo_bc_6xx-304_kl05` (34.3) without any PPO. Validation loss
-3.126 (held-out treechop 3.162, held-out 8.x 3.111; a new name-based split, so not comparable
-with the runs above). Videos: `evals/20261111_131528/`.
-
-`bc_6xx-1762_8xx-1957_plus20` continues that model for 20 more epochs (`bc_train.py --init`, lr 1e-4
-falling to 0, epochs 21-40). Validation loss 3.126 -> 3.116 (treechop 3.162 -> 3.145), flat from
-about epoch 34, while the training loss kept falling (3.113 -> 3.088): the gap between them doubled,
-so more epochs would mostly memorise. Game score 38.3 -> 42.8: better on 14 worlds, worse on 7, tied
-on 3, +4.5 per world with a standard error of about 3.8, so it may be noise. No 0-log games (before:
-2), but 3 deaths (before: 0), all after step 800.
-
-`bc_6xx-1762_8xx-1957_plus40` continues `_plus20` for 20 more (epochs 41-60, same lr 1e-4 -> 0).
-Validation loss 3.116 -> 3.111 (treechop 3.145 -> 3.137), the train/validation gap grew to 0.039.
-Game score 37.5: against `_plus20` -5.3 per world (standard error about 4.0, better on 8, worse on
-14), against 20 epochs -0.8 (about 5.2). So 20, 40 and 60 epochs score the same within the noise
-(38.3 / 42.8 / 37.5): after 20 epochs the small validation gains no longer show up in the game.
-
-`bc_6xx-1763_7xx-2256_8xx-1971_9xx-832_10xx-777`: BC on all versions 6-10 (7,599 segments, about twice the data), 20 epochs, lr 3e-4, window 5 s, 67 min including the new 27 GB frame cache. Validation loss per version: 6.x 3.162 (same as before), 8.x 3.096 (before 3.111), 7.x 3.364, 9.x 3.127, 10.x 3.297. Game score 41.6: against the 20-epoch 6.x + 8.x model +3.3 per world (standard error about 4.1, better on 9, worse on 10), against `_plus20` -1.2 (about 3.0). So doubling the data with 7.x-10.x did not raise the game score within the noise.
-
-ImpalaCNN (`networks.py`, `bc_train.py --arch impala`): IMPALA-style ResNet, channels 32/64/64, 2 residual blocks per stage, 512 features, 2.56M parameters (NatureCNN: 0.61M). Same data and settings as the 41.6 model. The first try (`model_20261111_224940_bc_impala_...`) learned nothing: SB3 re-initialises every conv layer (orthogonal, gain sqrt 2), the activations grew ~20x through the residual blocks and the first updates killed ~3/4 of the features, so it only predicted the most common action (val loss 3.948 all 20 epochs). Fixed with a learned residual scale starting at 0 (ReZero). The fixed run stopped after epoch 4 (`model_20261112_000640_...`, history rebuilt from the log) and was continued for epochs 5-20 with `--init` and lr 2.7e-4 (where the 20-epoch cosine schedule would be) in `..._cont`. About 4.5 min per epoch. Validation loss 3.046 (NatureCNN 3.198), better on every version: 6.x 2.953, 7.x 3.189, 8.x 2.973, 9.x 3.009, 10.x 3.188; train 2.959. Game score **58.8** with no PPO: against NatureCNN on the same data +17.1 per world (standard error about 4.4, better on 17, worse on 4), against `_plus20` +16.0 (about 3.9), against the best PPO fine-tune (59.8) -1.0 (about 3.2). So the small network was the limit: a bigger one gives as much as PPO did.
-
-`bc_impala_6xx-1763_8xx-1971`: the same ImpalaCNN on 6.x + 8.x only (3,734 segments, ~2.3 min per epoch plus a new 13 GB frame cache). Validation loss 2.994 (on 6.x + 8.x held-out clips only); on the same clips the all-versions ImpalaCNN is better: 6.x 2.953 vs 2.973, 8.x 2.973 vs 3.002. Game score 51.1: against the all-versions ImpalaCNN -7.6 per world (standard error about 4.6, better on 11, worse on 8; the gap comes from a few worlds where it scored 6-24 and the all-versions model got 64: seeds 5, 9, 11, 21, 22), against NatureCNN on the same data (`_plus20`, 40 epochs) +8.3 (about 2.9). So with the bigger network the extra versions probably help (lower validation loss on the same clips, fewer very bad games), but the game-score gap is within about 1.7 standard errors.
-
-`ppo_bc_6xx-1762_8xx-1957_plus20_kl05`: PPO fine-tune of `_plus20` (lr 1e-4, ent 0.001, target_kl 0.05, 120k steps, 4 envs, ~2.7 h). Game score 59.8 (median 64): 19 of 24 worlds hit the 64-log cap, no deaths, lowest seeds 11 (26) and 23 (27). Against its BC start: +17.0 per world (standard error about 4.0, better on 19, worse on 2). Training reward at the end ~55 per 2,000-step episode. So PPO still adds a lot on top of a better BC model, and the 1,000-step eval is now near its ceiling: further gains will need a harder test (more steps, or a log count beyond 64).
-
-`ppo_bc_impala_all_kl05`: PPO fine-tune of the ImpalaCNN all-versions BC model (same settings as the other fine-tunes: lr 1e-4, ent 0.001, target_kl 0.05, 5 value warm-up updates, 120k steps, 4 envs, `--mc-mem 2G`, ~3 h incl. 9 Minecraft restarts: 4 at startup, 2 Java OutOfMemoryErrors). Training reward rose from ~46 to 58.6 per 2,000-step episode. Game score 59.6: against its BC start +0.8 per world (standard error about 2.0, better on 8, worse on 8), against the NatureCNN fine-tune (59.8) -0.2 (about 2.6). Worst worlds: seed 1 (30, the BC model's worst too), 11 and 18 (46). The 1,000-step test can no longer separate these models (17 of 24 worlds at 64); the training reward (55.7 -> 58.6 at the same step count) suggests this one is better over 2,000 steps.
-
-Steps to 64 logs (`won_at_step` in results.json, recorded by `evaluate.py` from Nov 12; for older evals recovered from the video frame counts, +-1 step), for worlds that reached 64 within 1,000 steps:
-
-| model | mean logs | worlds at 64 | median steps to 64 | mean | fastest | slowest |
+| policy | mean | median | worlds at 64 | 0-log games | deaths | eval |
 | --- | --- | --- | --- | --- | --- | --- |
-| BC NatureCNN `_plus20` | 42.8 | 4/24 | 800 | 788 | 589 | 964 |
-| BC ImpalaCNN all versions | 58.8 | 14/24 | 789 | 762 | 401 | 1000 |
-| PPO on NatureCNN `_plus20` | 59.8 | 19/24 | 756 | 746 | 538 | 969 |
-| PPO on ImpalaCNN all versions | 59.6 | 17/24 | 667 | 695 | 538 | 876 |
+| random actions | 2.5 | 1.5 | 0 | 6 | 1 | `runs/random/evals/20261111_155924` |
+| PPO from scratch `ppo_scratch_30k` (30k steps) | 3.0 | 1.5 | 0 | 8 | 6 | `20261111_155924` |
+| BC `bc_6xx-304` | 18.7 | 15.5 | 2 | 3 | 6 (drowning) | `20261110_114949` |
+| BC `bc_6xx-1603` | 26.5 | 22 | 4 | 0 | 4 | `20261111_105730` |
+| BC `bc_6xx-1762_8xx-1957` (3,719 segments, 1.13M examples) | 38.3 | 38.5 | 7 | 2 | 0 | `20261111_131528` |
+| BC `..._plus20` (40 epochs) | 42.8 | 44.5 | 4 | 0 | 3 | `20261111_142003` |
+| BC `..._plus40` (60 epochs) | 37.5 | 36 | 7 | 1 | 1 | `20261111_145652` |
+| BC `bc_6xx-1763_7xx-2256_8xx-1971_9xx-832_10xx-777` (all versions, 7,599 segments) | 41.6 | 42 | 6 | 0 | 1 | `20261111_211618` |
+| BC `bc_impala_6xx-1763_8xx-1971` (ImpalaCNN, 6.x + 8.x) | 51.1 | 64 | 13 | 0 | 2 | `20261112_124707` |
+| BC `bc_impala_..._10xx-777_cont` (ImpalaCNN, all versions) | **58.8** | 64 | 14 | 0 | 0 | `20261112_111541` |
+| PPO `ppo_bc_6xx-304_kl05` (120k checkpoint) | 34.3 | 30.5 | 3 | 2 | 1 | `20261110_193136` + `_220203` |
+| PPO `ppo_bc_6xx-1762_8xx-1957_plus20_kl05` | **59.8** | 64 | 19 | 0 | 0 | `20261111_191652` |
+| PPO `ppo_bc_impala_all_kl05` | **59.6** | 64 | 17 | 0 | 1 | `20261112_160817` |
 
-On the worlds both reached 64: PPO ImpalaCNN vs PPO NatureCNN -51 steps (standard error about 32, faster on 9 of 14), vs its BC start -54 (about 50, 10 worlds). So the ImpalaCNN fine-tune is probably the fastest, but not clearly; playing each world 2-3 times would firm this up.
+Scores are **logs collected per game** (1,000 steps, max 64), averaged over the 24 worlds.
 
-Random actions and PPO from scratch (30k steps, same actions and setup as now, no BC) were run on the same 24 worlds on Nov 11: 2.5 and 3.0 logs per game (from scratch minus random: +0.5, standard error about 0.9, so no better than random).
+**How to read a comparison** like "+7.9 logs (SE 2.9)": on each of the 24 worlds, take the new
+model's logs minus the old model's logs, and average. +7.9 means the new model got 7.9 more logs per
+game on average. SE (standard error) is how much that average could move from luck alone (spread of
+the 24 differences / sqrt(24)). If the difference is more than about 2 x SE it is very likely real;
+if less, it could be luck. Each comparison below names the model it is measured against.
 
-### Earlier: 8 worlds (seeds 1-8), before episodes ended on death
+### Steps to reach 64 logs (worlds that got there)
 
+`won_at_step`, recorded since Nov 12; for older evals recovered from video frame counts (+-1 step).
 
-| policy                                                                        | mean                 | median  | wins  | file                                 |
-| ----------------------------------------------------------------------------- | -------------------- | ------- | ----- | ------------------------------------ |
-| random actions                                                                | 2.9 / 3.2 (two runs) | 2.5     | 0     | `20261109_221254`, `20261109_225115` |
-| BC v1 `bc_6xx-303_v1-inventory-filter` (inventory filter)                     | 12.4                 | 5.5     | 0     | `20261109_221254`                    |
-| BC v2 `bc_6xx-304_v2-7actions` (mine_block stats + window before a log break) | 17.9                 | 10.5    | 0     | `20261109_221942`                    |
-| BC v3 `bc_6xx-304` (move/yaw/pitch actions)                                   | 21.4, re-run 26.8    | 13 / 20 | 1 / 2 | `20261109_225115`, `20261110_100622` |
-| fine-tune `ppo_bc_6xx-304_kl02_no-death-end`, checkpoint at 30k               | 21.4                 | 11.5    | 2     | `20261109_234542`                    |
-| fine-tune `ppo_bc_6xx-304_kl02_no-death-end`, checkpoint at 40k               | 17.6                 | 14.5    | 1     | `20261109_234542`                    |
+| model | worlds at 64 | median | mean | fastest | slowest |
+| --- | --- | --- | --- | --- | --- |
+| BC NatureCNN `_plus20` | 4 | 800 | 788 | 589 | 964 |
+| BC ImpalaCNN all versions | 14 | 789 | 762 | 401 | 1000 |
+| PPO on NatureCNN `_plus20` | 19 | 756 | 746 | 538 | 969 |
+| PPO on ImpalaCNN all versions | 17 | 667 | 695 | 538 | 876 |
 
+On shared wins, PPO ImpalaCNN is 51 steps faster than PPO NatureCNN (SE 32, 14 worlds) and 54 faster
+than its BC start (SE 50, 10 worlds): probably the best model, not yet clearly.
 
-(The short evals of 50-80 steps or a single seed, in `bc_6xx-304`'s `evals/`, were video/debug tests. A run that
-showed 3,259 fake "logs" from the Minecraft-hang bug was deleted.)
+## What we learned
 
-### Quick check: 4 worlds (seeds 1-4), episodes end on death, `evals/20261110_162445`
+**Baselines.** Random actions: 2.5 logs per game. PPO from scratch (30k steps, no BC): 3.0 logs per
+game, +0.5 logs vs random (SE 0.9), so no better than random. With only +1 per log and no help
+from demonstrations, PPO from scratch learns almost nothing at this budget.
 
+**More BC data (small network, NatureCNN, 20 epochs).** Each step adds data and is compared with
+the step before it:
 
-| policy                                                                 | s1  | s2  | s3  | s4  | mean     | deaths |
-| ---------------------------------------------------------------------- | --- | --- | --- | --- | -------- | ------ |
-| random                                                                 | 0   | 2   | 11  | 7   | 5.0      | 0/4    |
-| BC `bc_6xx-304`                                                        | 4   | 17  | 16  | 64  | 25.2     | 0/4    |
-| `ppo_bc_6xx-304_kl05` checkpoint at 50k                                | 16  | 34  | 64  | 64  | 44.5     | 0/4    |
-| `ppo_bc_6xx-304_kl05` final (~120k)                                    | 31  | 39  | 60  | 61  | **47.8** | 0/4    |
-| `ppo_bc_6xx-304_kl05` checkpoint at 120k (2nd eval, `20261110_192334`) | 38  | 47  | 64  | 64  | 53.2     | 0/4    |
-| `ppo_bc_6xx-304_kl05` final (~163k, `20261110_192334`)                 | 26  | 40  | 64  | 64  | 48.5     | 0/4    |
+| step | from | to | change (logs per game) | SE | real? |
+| --- | --- | --- | --- | --- | --- |
+| more 6.x clips | `bc_6xx-304`: 304 clips, 18.7 logs | `bc_6xx-1603`: 1,603 clips, 26.5 logs | +7.9 | 2.9 | yes |
+| add 8.x clips | `bc_6xx-1603`: 26.5 logs | `bc_6xx-1762_8xx-1957`: 3,719 clips, 38.3 logs | +11.8 | 3.8 | yes |
+| add 7.x, 9.x, 10.x | `bc_6xx-1762_8xx-1957`: 38.3 logs | all versions: 7,599 clips, 41.6 logs | +3.3 | 4.1 | could be luck |
 
+So with the small network, more data helped up to about 3,700 clips and then stopped. All
+versions vs the 40-epoch 6.x + 8.x model (`_plus20`, 42.8 logs): -1.2 logs (SE 3.0), the same.
 
-BC on these seeds across all 4 evaluations so far: s1 9/0/1/4, s2 26/21/31/17, s3 64/64/32/16,
-s4 32/64/64/64 (about 32 on average). Both fine-tuned checkpoints beat every BC run on seeds 1 and 2,
-so this is the first real sign that fine-tuning helps. Only 4 worlds, though: confirm on 24.
+The same filter is used for every version: a recording is kept only if the player broke at least 5
+logs with an axe; a log break is dropped if it took more than 2 s of attacking (probably by hand)
+or came after the player placed logs (taking their own building apart). From the kept recordings we
+train only on the 5 s before each log break.
 
-## PPO fine-tuning runs (from `bc_6xx-304`)
+**More epochs (NatureCNN, 6.x + 8.x).** 20 / 40 / 60 epochs: 38.3 / 42.8 / 37.5 logs per game.
+40 vs 20 epochs: +4.5 logs (SE 3.8); 60 vs 40: -5.3 logs (SE 4.0); both could be luck. Validation
+loss barely moved (3.126 -> 3.116 -> 3.111) while the gap to the training loss grew (0.013 -> 0.028
+-> 0.039): the model was starting to memorise. 20 epochs is enough.
 
-All runs: lr 1e-4, ent_coef 0.001, n_steps 1024 x 4 envs = 4,096 steps per update, 10 epochs,
-batch 64, 5 value warm-up updates (only the value head trains).
+**A bigger network was the limit.** Same all-versions data, only the network changed:
 
+| comparison | from | to | change (logs per game) | SE | real? |
+| --- | --- | --- | --- | --- | --- |
+| bigger network, all versions | NatureCNN: 41.6 logs | ImpalaCNN: 58.8 logs | +17.1 | 4.4 | yes |
+| bigger network, 6.x + 8.x | NatureCNN 40 epochs (`_plus20`): 42.8 logs | ImpalaCNN: 51.1 logs | +8.3 | 2.9 | yes |
+| more data, big network | ImpalaCNN 6.x + 8.x: 51.1 logs | ImpalaCNN all versions: 58.8 logs | +7.6 | 4.6 | probably |
 
-| run                   | target_kl | steps                                           | result                                                                                                                                                                                                                           |
-| --------------------- | --------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ppo_bc_6xx-304_kl02` | 0.02      | ~94k (stopped)                                  | Every update early-stopped at epoch 0 (KL ~0.04 > 0.03 limit). ep_rew_mean flat at ~21-24; explained_variance rose to ~0.6-0.75. No forgetting, but hardly any learning.                                                         |
-| `ppo_bc_6xx-304_kl05` | 0.05      | ~163k (120k with 4 envs, then +40k with 3 envs) | Most updates complete several epochs. At ~100k: ep_rew_mean rose from ~20 to ~34, explained_variance ~0.6-0.8, approx_kl ~0.03-0.046, clip_fraction ~0.3-0.4 (high), entropy 4.1 -> 4.65 (max is 5.69). Needs the 24-world eval. |
+With the big network, the extra versions do help: the 6.x + 8.x ImpalaCNN had a few very bad games
+(6-24 logs on seeds 5, 9, 11, 21, 22, where the all-versions one got 64), and on the same held-out
+6.x / 8.x clips the all-versions model predicts the human actions better (validation loss 2.953 vs
+2.973 and 2.973 vs 3.002). Validation loss overall: ImpalaCNN 3.046 vs NatureCNN 3.198, lower on
+every version. ImpalaCNN takes about 4.5 min per epoch on all versions (NatureCNN about 3 min).
 
+- The first ImpalaCNN try learned nothing (it only ever predicted the most common action;
+  validation loss stuck at 3.948): SB3 re-initialises every conv layer (orthogonal, gain sqrt 2),
+  the activations grew about 20x through the residual blocks, and about 3/4 of the features died
+  in the first updates. Fixed with a learned residual scale that starts at 0 (ReZero). Failed run:
+  `model_20261111_224940_bc_impala_...`. The fixed run stopped after epoch 4
+  (`model_20261112_000640_...`) and was continued for epochs 5-20 (lr 2.7e-4 -> 0) as `..._cont`.
 
-Note: training ep_rew_mean is **not comparable** to eval scores. Training episodes average about
-1,500 steps (eval: 1,000), use random worlds, and average over the last 100 episodes from many
-policy versions.
+**PPO fine-tuning** (120k steps, about 2.5-3 h). Each fine-tune is compared with the BC model it
+started from:
 
-## Observations
+| fine-tune | BC start | after PPO | change (logs per game) | SE | real? |
+| --- | --- | --- | --- | --- | --- |
+| `ppo_bc_6xx-304_kl05` | `bc_6xx-304`: 18.7 logs | 34.3 logs | +15.7 | 3 | yes |
+| `ppo_bc_6xx-1762_8xx-1957_plus20_kl05` | `_plus20`: 42.8 logs | 59.8 logs | +17.0 | 4.0 | yes |
+| `ppo_bc_impala_all_kl05` | ImpalaCNN all versions: 58.8 logs | 59.6 logs | +0.8 | 2.0 | can't tell |
 
+On the ImpalaCNN model the test can't show a gain, because the BC model already reached 64 logs on
+14 of 24 worlds. Training says PPO did help: logs per 2,000-step training game rose from about 46
+to 58.6 (the NatureCNN fine-tune ended at 55.7 after the same steps), and it reaches 64 logs about
+50 steps sooner (table above). PPO's result depends mostly on where it starts: it reinforces what
+the BC model already does some of the time.
 
+- target_kl 0.02 was too strict (every update stopped in its first epoch); 0.05 works.
+- `ppo_bc_6xx-304_kl05` stopped improving: about 38 logs per training game from 126k to 163k steps.
+- Training logs per game (`ep_rew_mean`) can't be compared directly with eval scores: training
+  games are 2,000 steps and use random worlds.
 
-### Data / behaviour cloning
+**The 1,000-step test is now near its limit** (14-19 of 24 worlds at 64 logs for the best models).
+Every world has been cleared by some model, and different models fail on different worlds, so the
+remaining misses are mostly bad luck. To compare the best models: use steps to reach 64, and play
+each world 2-3 times.
 
-- Filtering VPT clips by inventory kept clips of people just walking around. Filtering with the
-`mine_block` stats, plus a window before each log break, fixed it (BC 12.4 -> 17.9).
-- Matching the action space to what humans actually do (separate move, yaw and pitch steps)
-helped further (about 21 on 8 worlds).
-- BC was the big jump overall: random about 3, PPO from scratch about 5, BC about 19-21.
+## Failure modes (from eval videos)
 
+- NatureCNN BC: drowning (all 6 deaths of `bc_6xx-304`), staring at the sky inside leaves, worst in
+  plains or near water.
+- After PPO: drowning gone; left: digging into the ground (attack is held, so looking down digs),
+  wandering into dark caves (seed 5 death, likely a mob), getting stuck in hilly terrain by water.
+- ImpalaCNN BC and its fine-tune both do worst on seed 1 (28 and 30 logs).
 
+## Evaluation noise
 
-### Failure modes (from eval videos)
+- The same model on the same world isn't repeatable (BC on seed 3: 64, 64, 16, 14), and Minecraft
+  itself isn't deterministic (frames diverge by tick ~20 with the same actions).
+- So: 24 worlds, paired differences with SE, and treat a few logs as noise.
 
-- **Drowning**: all 6 deaths in the 24-world baseline. The agent walks into water and keeps
-chopping and holding forward.
-- **Staring at the sky** inside tree leaves.
-- Does best in dense forests, worst in plains or near water (0-log games).
+## Infrastructure
 
+- Each Minecraft instance uses ~3-4 GB RAM at `--mc-mem 2G`; 4 instances is the limit in 27 GB WSL.
+  Cursor's Pyright language server can grow to 8-12 GB; check before 4-instance runs.
+- About 2 Minecraft restarts per hour of PPO training. Causes: all 4 starting at once (startup
+  timeouts), and Java OutOfMemoryError at 2G after many world resets (an update can stall ~20 min).
+  Options: `--mc-mem 3G` (~24 GB total), staggered startup, planned restarts every N games.
+- MineRL returns a random observation on a timeout (caused fake "logs" once); now caught via
+  `info["error"]` and the instance is restarted. `ObservationFromLifeStats` hung with 4 instances,
+  so death is detected from the axe count.
+- PPO speed: ~17-20 agent steps/s in total over 4 instances (SB3 `time/fps` is the sum), incl. PPO
+  updates and resets; ~2.5-3 h per 120k steps.
 
+## Earlier evals (before the current setup)
 
-### Fine-tuned (120k) failure modes, from the 24-world videos
-
-- **Drowning is gone**: 0 drownings in 24 games (BC: 6).
-- **Digging into the ground** (seed 22, 0 logs): attack is always held, so looking down digs. It dug
-itself into a dark pit (19 dirt in the inventory) and stayed there from about step 300 to the end.
-- **Caves / darkness** (seed 5, the only death): with 8 logs it wandered into a dark stone area,
-lost health and died at step 783 (looks like a mob; the death message is too small to read).
-- **Bad terrain** (seed 13, 0 logs): spawned by water among hills, saw birch trees but never got to a
-trunk, spent the time jumping around and looking at leaves or the sky.
-
-
-
-### Evaluation noise
-
-- The same model on the same world is not repeatable: BC on seed 3 scored 64, 64, 16 and 14
-across runs. The same BC model on 8 worlds averaged 21.4 one time and 26.8 the next.
-- Minecraft itself isn't deterministic: the same random action sequence on world 3 gave 11 and
-10 logs, and the frames diverge by about tick 20.
-- So use 24+ worlds, and treat differences of a few logs as noise.
-
-
-
-### PPO behaviour
-
-- target_kl 0.02 was too strict for this setup: the first epoch alone already exceeded
-1.5 x 0.02 = 0.03, so each update used its data for less than one pass.
-- During warm-up, approx_kl was about 3e-8, not 0: GPU rounding (different batch sizes, TF32),
-not a real change.
-- PPO is on-policy: each 4,096-step batch is used for one update and thrown away, which is
-expensive when each step costs about 50 ms of Minecraft. If PPO stays slow, try an off-policy
-method that also uses the demos (e.g. SQIL or DQfD-style replay buffers; this approach won the
-MineRL competitions).
-
-
-
-### Infrastructure
-
-- Each Minecraft instance uses about 3.3 GB of RAM (Java about 2.4 GB + worker about 0.85 GB);
-4 instances is the practical limit in 28 GB WSL.
-- On a timeout, MineRL returns a random observation (that caused the fake logs). It's now caught
-via `info["error"]` and the instance is restarted.
-- `ObservationFromLifeStats` caused hangs with 4 instances; death is detected from the axe
-count instead.
-
-
+8 worlds, episodes didn't end on death: random 2.9-3.2; BC v1 inventory filter
+(`bc_6xx-303_v1-inventory-filter`) 12.4; v2 mine_block filter + window (`bc_6xx-304_v2-7actions`)
+17.9; v3 move/yaw/pitch actions (`bc_6xx-304`) 21.4 / 26.8; `ppo_bc_6xx-304_kl02_no-death-end` 21.4
+at 30k. 4 worlds (`bc_6xx-304`'s `evals/20261110_162445`, `_192334`): BC 25.2, `ppo_bc_6xx-304_kl05`
+47.8-53.2. Short 50-80 step and single-seed evals in `bc_6xx-304`'s `evals/` were video tests.
 
 ## Next steps
 
-- Confirm `ppo_bc_6xx-304_kl05` on the 24 worlds (the 4-world check: 47.8 vs BC 25.2).
-- From 120k to 163k, ep_rew_mean stayed flat at ~38 and the 4-world score didn't change (120k: 53.2, 163k: 48.5):
-more PPO at these settings has stopped paying off. Next, find what still fails on 24 worlds.
-- If fine-tuning loses BC skills: add a KL penalty toward the BC policy.
-- If the reward collapses: lower target_kl or the learning rate (clip_fraction is already high).
-
+- Make the test discriminate again: compare steps to 64, play each world 2-3 times.
+- Longer PPO on ImpalaCNN BC (300-500k steps, overnight) with `--mc-mem 3G` and staggered startup.
+- Look at the seed 1 videos (both ImpalaCNN models fail there).
+- Off-policy demo-based RL (DQfD / SQIL) or a faster simulator (CraftGround trial) to afford more RL.
