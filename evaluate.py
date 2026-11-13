@@ -133,12 +133,12 @@ def _init_worker(mc_mem):
 def _run_job(job):
     """Play one policy on one seeded world. Returns (policy label, seed, logs, seconds, step it died
     at or None, step it reached LOGS_TO_WIN or None, spawn note or None)."""
-    label, path, seed, steps, video_path, layout = job
+    label, path, seed, steps, video_path, layout, deterministic = job
     import torch
     from stable_baselines3 import PPO
     start = time.time()
     rng = np.random.RandomState(seed)
-    torch.manual_seed(seed)  # the model samples actions; fix that randomness too
+    torch.manual_seed(seed)  # the model samples actions (unless deterministic); fix that randomness too
     if path is not None and path not in _models:
         _models[path] = PPO.load(path, device="cpu")  # tiny network, CPU is fine
     writer = None
@@ -178,7 +178,7 @@ def _run_job(job):
             if path is None:
                 action = [rng.randint(n) for n in T.ACTION_DIMS]
             else:
-                action = _models[path].predict(obs, deterministic=False)[0]
+                action = _models[path].predict(obs, deterministic=deterministic)[0]
             state["step"], state["action"] = step, action
             obs, _, done, truncated, info = _env.step(action)
             if done or truncated:
@@ -236,6 +236,8 @@ def main():
     parser.add_argument("--video", choices=VIDEO_LAYOUTS, default="both",
                         help="with --record: both = game + agent's view side by side, game = only the game, "
                              "agent = only what the agent sees")
+    parser.add_argument("--deterministic", action="store_true",
+                        help="always take the model's most likely action instead of sampling one")
     args = parser.parse_args()
 
     policies = []
@@ -249,7 +251,7 @@ def main():
         if problem:
             print(f"Skipping {arg}: {problem}")
             continue
-        policies.append((label_for(arg, path), path))
+        policies.append((label_for(arg, path) + (" [det]" if args.deterministic and path else ""), path))
     if not policies:
         print("No models to evaluate.")
         return
@@ -269,9 +271,9 @@ def main():
 
     def video_for(label, seed):
         # inside the run's own folder, so the run name isn't repeated: final_seed3.mp4, random_seed3.mp4
-        return os.path.join(out_dirs[label], f"{label.split('/')[-1]}_seed{seed}.mp4") if args.record else None
+        return os.path.join(out_dirs[label], f"{label.split('/')[-1].replace(' [det]', '_det')}_seed{seed}.mp4") if args.record else None
 
-    jobs = [(label, path, seed, args.steps, video_for(label, seed), args.video)
+    jobs = [(label, path, seed, args.steps, video_for(label, seed), args.video, args.deterministic)
             for label, path in policies for seed in args.seeds]
     print(f"{len(policies)} policies x {len(args.seeds)} worlds = {len(jobs)} episodes of "
           f"{args.steps} steps, {args.workers} Minecraft instance(s)")
@@ -311,7 +313,7 @@ def main():
     for d in sorted(set(out_dirs.values())):
         mine = [label for label, _ in policies if out_dirs[label] == d]
         with open(os.path.join(d, "results.json"), "w") as f:
-            json.dump({"seeds": args.seeds, "steps": args.steps,
+            json.dump({"seeds": args.seeds, "steps": args.steps, "deterministic": args.deterministic,
                        "results": {l: results[l] for l in mine},
                        "died_at_step": {l: deaths[l] for l in mine},
                        "won_at_step": {l: wins[l] for l in mine},
